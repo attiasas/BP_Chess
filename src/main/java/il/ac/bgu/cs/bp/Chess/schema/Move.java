@@ -20,14 +20,20 @@ public class Move extends BEvent
     {
         String res = "";
 
-        res += (char)(source.column + 'a' - 1);
-        res += (source.row);
-        res += (char)(target.column + 'a' - 1);
-        res += (target.row);
+        res += (char)(source.column + 'a');
+        res += (source.row + 1);
+        res += (char)(target.column + 'a');
+        res += (target.row + 1);
 
         //res += " [" + source.id + " -> " + target.id + "]"; // debug
 
         return res;
+    }
+
+    public void updateBoard(Piece[][] board)
+    {
+        board[source.row][source.column] = null;
+        board[target.row][target.column] = piece;
     }
 
   /*  @Override
@@ -52,7 +58,11 @@ public class Move extends BEvent
         else if (target == null) {
             if (other.target != null)
                 return false;
-        }else if (!source.equals(other.source) || !target.equals(other.target))
+        }
+        else if (piece == null) {
+            if (other.piece != null)
+                return false;
+        }else if (!source.equals(other.source) || !target.equals(other.target) || !piece.equals(other.piece))
             return false;
         return true;
     }

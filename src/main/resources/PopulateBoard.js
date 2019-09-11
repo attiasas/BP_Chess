@@ -1,14 +1,18 @@
 importPackage(Packages.il.ac.bgu.cs.bp.Chess.schema);
 
+var fenEvent = bp.EventSet("", function (e) {
+   return e.name.equals("ParseFen");
+});
+
 bp.registerBThread("Populate",function ()
 {
     while (true)
     {
-        var toParse = bp.sync({waitFor:bp.Event("ParseFen")}).data;
+        var toParse = bp.sync({waitFor:fenEvent}).data;
 
-        parseBoard(toParse);
+        var board = parseBoard(toParse.toString());
 
-        bp.sync({request:bp.Event("Done Populate")});
+        bp.sync({request:bp.Event("Done Populate",board)});
     }
 
     //var normal = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
@@ -21,7 +25,7 @@ bp.registerBThread("Populate",function ()
 
 
 //region Black Moves
-bp.registerBThread("Set pieces Auto Moves",function () {
+/*bp.registerBThread("Set pieces Auto Moves",function () {
     var init = bp.EventSet("init event", function(evt) {
         return (evt.data==null) ?
             false :
@@ -55,9 +59,76 @@ bp.registerBThread("Set pieces Auto Moves",function () {
     }
     else bp.sync({request:bp.Event("init data corrupt")});
 
-});
-
+});*/
 function parseBoard(toParse)
+{
+    var tokens = toParse.split("/");
+    var result = [];
+    var currentToken = "";
+    var row = 0,column = 0;
+    var blackCounter = [1,1,1,1,1,1];
+    var whiteCounter = [1,1,1,1,1,1];
+
+    for(var i = 0; i < tokens.length; i++)
+    {
+        var currentRow = [];
+
+        //bp.log.info("token: " + tokens[i] + "(" + (tokens[i].length()) + ")");
+        for(var token = 0; token < tokens[i].length(); token++)
+        {
+            var currentToken = tokens[i].substring(token,token+1);
+            var toNum = parseInt(currentToken);
+
+            //bp.log.info("token: " + tokens[i] + ", toParse: " + currentToken + "(" + token + "), toNum: " + toNum + "inNan: " + isNaN(toNum));
+
+            if(isNaN(toNum))
+            {
+                var piece = null;
+                switch(String(currentToken))
+                {
+                    case "p": piece = new Piece(Piece.Type.Pawn,Piece.Color.White); break;
+                    case "n": piece = new Piece(Piece.Type.Knight,Piece.Color.White); break;
+                    case "b": piece = new Piece(Piece.Type.Bishop,Piece.Color.White); break;
+                    case "r": piece = new Piece(Piece.Type.Rook,Piece.Color.White); break;
+                    case "q": piece = new Piece(Piece.Type.Queen,Piece.Color.White); break;
+                    case "k": piece = new Piece(Piece.Type.King,Piece.Color.White); break;
+                    case "P": piece = new Piece(Piece.Type.Pawn,Piece.Color.Black); break;
+                    case "N": piece = new Piece(Piece.Type.Knight,Piece.Color.Black); break;
+                    case "B": piece = new Piece(Piece.Type.Bishop,Piece.Color.Black); break;
+                    case "R": piece = new Piece(Piece.Type.Rook,Piece.Color.Black); break;
+                    case "Q": piece = new Piece(Piece.Type.Queen,Piece.Color.Black); break;
+                    case "K": piece = new Piece(Piece.Type.King,Piece.Color.Black); break;
+                    //default: bp.log.info("Default: " + typeof piece); break;
+                }
+
+                currentRow.push(piece);
+                if(piece != null)
+                {
+                    var cell = Cell(row,column++);
+                    bp.sync({request:bp.Event("Create",{cell:cell,piece:piece})});
+                }
+                //bp.log.info(currentToken + " -> " + piece);
+            }
+            else
+            {
+                for(var n = 0; n < toNum; n++)
+                {
+                    currentRow.push(null);
+                }
+                //bp.log.info('0');
+            }
+        }
+
+        column = 0;
+        row++;
+        result.push(currentRow);
+    }
+
+    return result;
+}
+
+
+/*function parseBoard(toParse)
 {
     var tokens = toParse.split("/");
     var result = [];
@@ -113,4 +184,5 @@ function parseBoard(toParse)
     }
 
     return result;
-}
+    }
+ */

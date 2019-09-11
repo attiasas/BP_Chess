@@ -107,7 +107,7 @@ function setPawnMoves(board,piece) {
          bp.sync({request: getMove(piece.myCell, board[piece.myCell.row + count][piece.myCell.col])});
       }
    });
-/*
+
    bp.registerBThread("Enforce " + piece + " Movement", function(){
          var gameBoard = board;
          var myPiece = piece;
@@ -186,7 +186,7 @@ function setPawnMoves(board,piece) {
           }
           //bp.log.info("done " + myPiece + "turn");
        }
-   });*/
+   });
 }
 //endregion Pawn
 
