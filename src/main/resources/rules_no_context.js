@@ -62,8 +62,12 @@ var blackMoves = bp.EventSet("black Moves",function (e) {
     return (e instanceof Move) && (e.piece !== null) && (Piece.Color.Black.equals(e.piece.color));
 });
 
+var outBoundsMoves = bp.EventSet("",function (e) {
+   return moves.contains(e) && (e.source.row < 0 || e.source.row > 7 || e.source.column < 0 || e.source.column > 7 || e.target.row < 0 || e.target.row > 7 || e.target.column < 0 || e.target.column > 7);
+});
+
 var autoMovesBlack = true;
-var autoMovesWhite = false;
+var autoMovesWhite = true;
 
 //region general
 bp.registerBThread("EnforceTurns",function () {
@@ -74,6 +78,13 @@ bp.registerBThread("EnforceTurns",function () {
         bp.sync({waitFor:blackMoves,block:whiteMoves});
         //bp.log.info("Black move found, waiting for white");
     }
+});
+
+bp.registerBThread("Movement in bounds",function () {
+   while (true)
+   {
+       bp.sync({block:outBoundsMoves});
+   }
 });
 
 bp.registerBThread("don't move if eaten ", function() {
@@ -137,23 +148,27 @@ bp.registerBThread("pawn rules", function(){
         var pawn = pawnCreationEvent.piece;
         var initCell = pawnCreationEvent.cell;
         var forward = pawn.color.equals(Piece.Color.Black) ? -1 : 1;
-        var myColorGroup = pawn.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
-        var otherColor = pawn.color.equals(Piece.Color.White) ? Piece.Color.Black : Piece.Color.White;
+        var colorGroup = pawn.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
         var startTurnEvent = pawn.color.equals(Piece.Color.White) ? bp.Event("White Turn") : bp.Event("Black Turn");
 
         if(autoMovesBlack && (pawn.color.equals(Piece.Color.Black)) || (autoMovesWhite && pawn.color.equals(Piece.Color.White)))
         {
             bp.registerBThread("move " + pawn + " one forward ", function() {
                 var cell = initCell;
+                var myPawn = pawn;
+                var startTurn = startTurnEvent;
+                var myForward = forward;
+                var myColorGroup = colorGroup;
+
                 while(true) {
+                    bp.log.info(myPawn + " is Waiting for: " + startTurn);
+                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
-                    bp.sync({waitFor:startTurnEvent, interrupt:moveToWithColor(cell,otherColor)}); // wait for turn and kill if piece eaten
-
-                    var nextCell = Cell(cell.row + forward, cell.col);
-                    var myMove = Move(cell, nextCell, pawn);
+                    var nextCell = Cell(cell.row + myForward, cell.column);
+                    var myMove = Move(cell, nextCell, myPawn);
 
                     var moveEvent = bp.sync({ request: myMove, waitFor: myColorGroup});
-                    if(pieceMove(pawn).contains(moveEvent))
+                    if(pieceMove(myPawn).contains(moveEvent))
                     {
                         cell = moveEvent.target;
                     }
@@ -163,13 +178,22 @@ bp.registerBThread("pawn rules", function(){
             bp.registerBThread("move " + pawn + " two forward", function()
             {
                 var cell = initCell;
+                var myPawn = pawn;
+                var myForward = forward;
+                var startTurn = startTurnEvent;
+                var myColorGroup = colorGroup;
 
-                bp.sync({waitFor:startTurnEvent, interrupt:moveToWithColor(cell,otherColor)}); // wait for turn and kill if piece eaten
-
-                bp.sync({
-                    request: Move(cell, Cell(cell.row + forward*2, cell.col)),
-                    interrupt: pieceMove(piece)
-                });
+                while (true)
+                {
+                    //bp.log.info(myPawn + " waiting start, interrupt from: " + cell);
+                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    //bp.log.info(myPawn + " request double move, interrupt from: " + myPawn);
+                    bp.sync({
+                        request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
+                        waitFor: myColorGroup,
+                        interrupt: pieceMove(myPawn)
+                    });
+                }
             });
 
             /*bp.registerBThread("pawn eat " + piece, function() {
@@ -183,16 +207,21 @@ bp.registerBThread("pawn rules", function(){
 
             bp.registerBThread(pawn + " Eat Movement", function() {
                 var cell = initCell;
+                var myPawn = pawn;
+                var startTurn = startTurnEvent;
+                var myColorGroup = colorGroup;
+                var myForward = forward;
+
                 while(true) {
 
-                    bp.sync({waitFor:startTurnEvent, interrupt:moveToWithColor(cell,otherColor)}); // wait for turn and kill if piece eaten
+                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
-                    var nextCell1 = Cell(cell.row + forward, cell.col + 1);
-                    var nextCell2 = Cell(cell.row + forward, cell.col - 1);
+                    var nextCell1 = Cell(cell.row + myForward, cell.column + 1);
+                    var nextCell2 = Cell(cell.row + myForward, cell.column - 1);
 
-                    var moveEvent = bp.sync({ request: [Move(cell, nextCell1, piece), Move(cell, nextCell2, piece)],
+                    var moveEvent = bp.sync({ request: [Move(cell, nextCell1, myPawn), Move(cell, nextCell2, myPawn)],
                         waitFor: myColorGroup});
-                    if(pieceMove(pawn).contains(moveEvent))
+                    if(pieceMove(myPawn).contains(moveEvent))
                     {
                         cell = moveEvent.target;
                     }
@@ -203,27 +232,105 @@ bp.registerBThread("pawn rules", function(){
         function pawnCellRules() {
             var i,j;
             for(i = 0 ; i < 8; i++) {
-                for(j = 0 ; j < 8; j++) {
+                for(j = 0 ; j < 8; j++) {(function (i,j) {
                     var cell = Cell(i,j);
-                    bp.registerBThread(pawn + " don't eat empty " + cell, function() {
+
+                    bp.registerBThread(pawn + " can move only to empty " + cell,function () {
+                        var pawnRow = initCell.row;
+                        var pawnColumn = initCell.column;
+                        var myPawn = pawn;
                         var piece = null;
+                        var myForward = forward;
                         var moveEvent;
-                        while(true) {
-                            if(piece === null) {
+                        var nextCell1;
+                        var nextCell2;
+
+                        while (true)
+                        {
+                            nextCell1 = Cell(pawnRow + myForward, pawnColumn);
+                            nextCell2 = Cell(pawnRow + 2 * myForward, pawnColumn);
+                            if(piece !== null && (cell.equals(nextCell1) || cell.equals(nextCell2)))
+                            {
+                                moveEvent = bp.sync({waitFor: [moveFrom(cell), moveTo(cell),pieceMove(myPawn)],
+                                    block: moveToWithPiece(cell,myPawn)});
+
+                                // track pawn location
+                                if(pieceMove(myPawn).contains(moveEvent))
+                                {
+                                    pawnRow = moveEvent.target.row;
+                                    pawnColumn = moveEvent.target.column;
+                                }
+
+                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
+                            }
+                            else
+                            {
                                 moveEvent = bp.sync({
-                                    waitFor: [moveTo(cell), pieceCreationInCell(cell)],
-                                    block: moveToWithPiece(cell,pawn)
+                                    waitFor: [moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)]
                                 });
 
-                                if(moveEvent instanceof Move) piece = moveEvent.piece;
-                                else piece = moveEvent.data.piece;
+                                // track pawn location
+                                if(pieceMove(myPawn).contains(moveEvent))
+                                {
+                                    pawnRow = moveEvent.target.row;
+                                    pawnColumn = moveEvent.target.column;
+                                }
 
-                            } else {
-                                moveEvent = bp.sync({waitFor: [moveFrom(cell), moveTo(cell)]});
-                                piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
+                                if(moveTo(cell).contains(moveEvent)) piece = moveEvent.piece;
+                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
+                                //bp.log.info(cell + " is occupied by: " + piece);
                             }
                         }
                     });
+
+                    bp.registerBThread(pawn + " don't eat empty " + cell, function() {
+                        var pawnRow = initCell.row;
+                        var pawnColumn = initCell.column;
+                        var myPawn = pawn;
+                        var myForward = forward;
+                        var piece = null;
+                        var moveEvent;
+                        var nextCell1;
+                        var nextCell2;
+
+                        while(true) {
+                            nextCell1 = Cell(pawnRow + myForward, pawnColumn + 1);
+                            nextCell2 = Cell(pawnRow + myForward, pawnColumn - 1);
+                            //bp.log.info(cell + " is occupied by: " + piece + " | tracking " + myPawn + " at: [row=" + pawnRow + ", col=" + pawnColumn + "]");
+                            if(piece === null && (cell.equals(nextCell1) || cell.equals(nextCell2))) {
+                                bp.log.info(cell + " is empty waiting for move and blocking " + myPawn + " [" + pawnRow + "," + pawnColumn + "] moving to this cell");
+                                moveEvent = bp.sync({
+                                    waitFor: [moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)],
+                                    block: moveToWithPiece(cell,myPawn)
+                                });
+
+                                // track pawn location
+                                if(pieceMove(myPawn).contains(moveEvent))
+                                {
+                                    pawnRow = moveEvent.target.row;
+                                    pawnColumn = moveEvent.target.column;
+                                }
+
+                                if(moveTo(cell).contains(moveEvent)) piece = moveEvent.piece;
+                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
+                                //bp.log.info(cell + " is occupied by: " + piece);
+
+                            } else {
+                                //bp.log.info(cell + " occupied by " + piece + " movement allowed to: " + myPawn);
+                                moveEvent = bp.sync({waitFor: [moveFrom(cell), moveTo(cell),pieceMove(myPawn)]});
+
+                                // track pawn location
+                                if(pieceMove(myPawn).contains(moveEvent))
+                                {
+                                    pawnRow = moveEvent.target.row;
+                                    pawnColumn = moveEvent.target.column;
+                                }
+
+                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
+                            }
+                        }
+                    });
+                })(i,j);
                 }
             }
         }

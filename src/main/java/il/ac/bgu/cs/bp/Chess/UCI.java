@@ -35,6 +35,8 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
     private static final String ENGINENAME = "BP_Chess";
     private static final String AUTHOR = "Assaf Attias";
 
+    private boolean turn = true; // debug
+
     /**
      * Constructor
      * @param in
@@ -131,6 +133,7 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
                 System.out.println("bestmove " + ((Move)theEvent).toUciString());
             }
             ((Move)theEvent).updateBoard(pieceBoard);
+            turn = !turn;
         }
     }
 
@@ -211,7 +214,14 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
      */
     public void myTurn()
     {
-        bThreadGame.bProgram.enqueueExternalEvent(new BEvent("Black Turn"));
+        if(turn)
+        {
+            bThreadGame.bProgram.enqueueExternalEvent(new BEvent("White Turn"));
+        }
+        else
+        {
+            bThreadGame.bProgram.enqueueExternalEvent(new BEvent("Black Turn"));
+        }
     }
 
     /**

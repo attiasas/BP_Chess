@@ -32,6 +32,8 @@ public class Move extends BEvent
 
     public void updateBoard(Piece[][] board)
     {
+        if(source.row < 0 || source.row > board.length || source.column < 0 || source.column >= board[source.row].length) return;
+        if(target.row < 0 || target.row > board.length || target.column < 0 || target.column >= board[target.row].length) return;
         board[source.row][source.column] = null;
         board[target.row][target.column] = piece;
     }
