@@ -1,17 +1,38 @@
-var pieceCreation = bp.EventSet("Create", function (e) {
+
+var autoMovesBlack = true;
+var autoMovesWhite = true;
+
+//<editor-fold desc="Global Events and Sets">
+
+//<editor-fold desc="Creation Functions And Sets">
+var pieceCreation = bp.EventSet("", function (e) {
     return e.name.equals("Create");
 });
 
 function pieceCreationInCell(cell) {
-    return bp.EventSet("Create", function (e) {
-        return e.name.equals("Create") && e.data.cell.equals(cell);
+    return bp.EventSet("", function (e) {
+        return pieceCreation.contains(e) && e.data.cell.equals(cell);
     });
 }
 
 var pawnCreation = bp.EventSet("Create Pawns", function (e) {
-    return e.name.equals("Create") && e.data.piece.type.equals(Piece.Type.Pawn);
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Pawn);
 });
 
+var rookCreation = bp.EventSet("Create Rooks", function (e) {
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Rook);
+});
+
+var kingCreation = bp.EventSet("Create Kings", function (e) {
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.King);
+});
+
+var knightCreation  = bp.EventSet("Create Knights", function (e) {
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Knight);
+});
+//</editor-fold>
+
+//<editor-fold desc="Move Sets Functions">
 function moveTo(cell) {
     return bp.EventSet("", function (e) {
         return (e instanceof Move) && e.target.equals(cell);
@@ -21,12 +42,6 @@ function moveTo(cell) {
 function moveFrom(cell) {
     return bp.EventSet("", function (e) {
         return (e instanceof Move) && e.source.equals(cell);
-    });
-}
-
-function moveToFrom(from, to) {
-    return bp.EventSet("", function (e) {
-        return (e instanceof Move) && e.source.equals(from) && e.target.equals(to);
     });
 }
 
@@ -49,27 +64,33 @@ function pieceMove(piece) {
         return (e instanceof Move) && e.piece.equals(piece);
     });
 }
+//</editor-fold>
 
+//<editor-fold desc="Global Move Sets">
 var moves = bp.EventSet("Game Moves", function (e) {
     return (e instanceof Move);
 });
 
 var whiteMoves = bp.EventSet("White Moves",function (e) {
-    return (e instanceof Move) && (e.piece !== null) && (Piece.Color.White.equals(e.piece.color));
+    return moves.contains(e) && (e.piece !== null) && (Piece.Color.White.equals(e.piece.color));
 });
 
 var blackMoves = bp.EventSet("black Moves",function (e) {
-    return (e instanceof Move) && (e.piece !== null) && (Piece.Color.Black.equals(e.piece.color));
+    return moves.contains(e) && (e.piece !== null) && (Piece.Color.Black.equals(e.piece.color));
 });
 
 var outBoundsMoves = bp.EventSet("",function (e) {
-   return moves.contains(e) && (e.source.row < 0 || e.source.row > 7 || e.source.column < 0 || e.source.column > 7 || e.target.row < 0 || e.target.row > 7 || e.target.column < 0 || e.target.column > 7);
+    return moves.contains(e) && (e.source.row < 0 || e.source.row > 7 || e.source.column < 0 || e.source.column > 7 || e.target.row < 0 || e.target.row > 7 || e.target.column < 0 || e.target.column > 7);
 });
 
-var autoMovesBlack = true;
-var autoMovesWhite = true;
+function startTurnEvent(piece) {
+    return bp.Event(piece.color + " Turn");
+}
+//</editor-fold>
 
-//region general
+//</editor-fold>
+
+//<editor-fold desc="General Rules">
 bp.registerBThread("EnforceTurns",function () {
     while (true)
     {
@@ -116,17 +137,22 @@ function cellRules() {
                 var piece = null;
                 var e;
                 while(true) {
-                    if(piece === null) {
-                        e = bp.sync({waitFor: [moveTo(cell), pieceCreationInCell(cell)]});
+                    if(piece === null)
+                    {
                         //bp.log.info("Enter to " + cell + " | E: " + e);
-                    } else {
-                        //bp.log.info("Blocking move to " + cell + " | Piece in cell: " + piece);
-                        e = bp.sync({waitFor: moveTo(cell), block: moveToWithColor(cell, piece.color)});
+                        e = bp.sync({waitFor: [moveTo(cell), pieceCreationInCell(cell)]});
+
+                        if(e instanceof Move) piece = e.piece;
+                        else piece = e.data.piece;
                     }
-                    //bp.log.info("Before: Cell " + cell + " Rules - piece: " + piece);
-                    if(e instanceof Move) piece = e.piece;
-                    else piece = e.data.piece;
-                    //bp.log.info("After: Cell " + cell + " Rules - piece: " + piece);
+                    else
+                    {
+                        //bp.log.info("Blocking move to " + cell + " | Piece in cell: " + piece);
+                        e = bp.sync({waitFor: [moveTo(cell),moveFrom(cell)], block: moveToWithColor(cell, piece.color)});
+
+                        piece = (moveTo(cell).contains(e)) ? e.piece : null;
+
+                    }
                 }
             });
         })(i,j);
@@ -135,9 +161,10 @@ function cellRules() {
 }
 
 cellRules();
-//endregion
+//</editor-fold>
 
-//region pawn
+
+//<editor-fold desc="Pawn Rules">
 bp.registerBThread("pawn rules", function(){
     while (true)
     {
@@ -149,20 +176,18 @@ bp.registerBThread("pawn rules", function(){
         var initCell = pawnCreationEvent.cell;
         var forward = pawn.color.equals(Piece.Color.Black) ? -1 : 1;
         var colorGroup = pawn.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
-        var startTurnEvent = pawn.color.equals(Piece.Color.White) ? bp.Event("White Turn") : bp.Event("Black Turn");
 
         if(autoMovesBlack && (pawn.color.equals(Piece.Color.Black)) || (autoMovesWhite && pawn.color.equals(Piece.Color.White)))
         {
             bp.registerBThread("move " + pawn + " one forward ", function() {
                 var cell = initCell;
                 var myPawn = pawn;
-                var startTurn = startTurnEvent;
                 var myForward = forward;
                 var myColorGroup = colorGroup;
 
                 while(true) {
-                    bp.log.info(myPawn + " is Waiting for: " + startTurn);
-                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    //bp.log.info(myPawn + " is Waiting for: " + startTurn);
+                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
                     var nextCell = Cell(cell.row + myForward, cell.column);
                     var myMove = Move(cell, nextCell, myPawn);
@@ -180,13 +205,12 @@ bp.registerBThread("pawn rules", function(){
                 var cell = initCell;
                 var myPawn = pawn;
                 var myForward = forward;
-                var startTurn = startTurnEvent;
                 var myColorGroup = colorGroup;
 
                 while (true)
                 {
                     //bp.log.info(myPawn + " waiting start, interrupt from: " + cell);
-                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
                     //bp.log.info(myPawn + " request double move, interrupt from: " + myPawn);
                     bp.sync({
                         request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
@@ -208,13 +232,12 @@ bp.registerBThread("pawn rules", function(){
             bp.registerBThread(pawn + " Eat Movement", function() {
                 var cell = initCell;
                 var myPawn = pawn;
-                var startTurn = startTurnEvent;
                 var myColorGroup = colorGroup;
                 var myForward = forward;
 
                 while(true) {
 
-                    bp.sync({waitFor:startTurn, interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
                     var nextCell1 = Cell(cell.row + myForward, cell.column + 1);
                     var nextCell2 = Cell(cell.row + myForward, cell.column - 1);
@@ -266,7 +289,7 @@ bp.registerBThread("pawn rules", function(){
                             else
                             {
                                 moveEvent = bp.sync({
-                                    waitFor: [moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)]
+                                    waitFor: [moveFrom(cell),moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)]
                                 });
 
                                 // track pawn location
@@ -276,7 +299,7 @@ bp.registerBThread("pawn rules", function(){
                                     pawnColumn = moveEvent.target.column;
                                 }
 
-                                if(moveTo(cell).contains(moveEvent)) piece = moveEvent.piece;
+                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
                                 else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
                                 //bp.log.info(cell + " is occupied by: " + piece);
                             }
@@ -298,7 +321,7 @@ bp.registerBThread("pawn rules", function(){
                             nextCell2 = Cell(pawnRow + myForward, pawnColumn - 1);
                             //bp.log.info(cell + " is occupied by: " + piece + " | tracking " + myPawn + " at: [row=" + pawnRow + ", col=" + pawnColumn + "]");
                             if(piece === null && (cell.equals(nextCell1) || cell.equals(nextCell2))) {
-                                bp.log.info(cell + " is empty waiting for move and blocking " + myPawn + " [" + pawnRow + "," + pawnColumn + "] moving to this cell");
+                                //bp.log.info(cell + " is empty waiting for move and blocking " + myPawn + " [" + pawnRow + "," + pawnColumn + "] moving to this cell");
                                 moveEvent = bp.sync({
                                     waitFor: [moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)],
                                     block: moveToWithPiece(cell,myPawn)
@@ -317,7 +340,7 @@ bp.registerBThread("pawn rules", function(){
 
                             } else {
                                 //bp.log.info(cell + " occupied by " + piece + " movement allowed to: " + myPawn);
-                                moveEvent = bp.sync({waitFor: [moveFrom(cell), moveTo(cell),pieceMove(myPawn)]});
+                                moveEvent = bp.sync({waitFor: [moveFrom(cell), pieceCreationInCell(cell), moveTo(cell),pieceMove(myPawn)]});
 
                                 // track pawn location
                                 if(pieceMove(myPawn).contains(moveEvent))
@@ -327,6 +350,7 @@ bp.registerBThread("pawn rules", function(){
                                 }
 
                                 if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
+                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
                             }
                         }
                     });
@@ -338,5 +362,119 @@ bp.registerBThread("pawn rules", function(){
         pawnCellRules();
     }
 });
+//</editor-fold>
 
-//endregion
+//<editor-fold desc="King Rules">
+bp.registerBThread("king rules", function ()
+{
+    while (true)
+    {
+        var kingCreationEvent = bp.sync({waitFor:kingCreation}).data;
+
+        var king = kingCreationEvent.piece;
+        var initCell = kingCreationEvent.cell;
+        var colorGroup = king.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
+        var otherColor = king.color.equals(Piece.Color.White) ? Piece.Color.Black : Piece.Color.White;
+
+        if(autoMovesBlack && (king.color.equals(Piece.Color.Black)) || (autoMovesWhite && king.color.equals(Piece.Color.White)))
+        {
+            bp.registerBThread(king + " Movement", function() {
+                var cell = initCell;
+                var myKing = king;
+                var myColorGroup = colorGroup;
+
+                while(true)
+                {
+                    bp.sync({waitFor:startTurnEvent(myKing), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+
+                    var optionalMoves = [];
+                    for(var row = cell.row - 1; row <= cell.row + 1; row++)
+                    {
+                        for(var col = cell.column - 1; col <= cell.column + 1; col++)
+                        {
+                            if(cell.row != row || cell.column != col) optionalMoves.push(Move(cell, Cell(row, col), myKing));
+                        }
+                    }
+
+                    //bp.log.info("M: " + optionalMoves);
+                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
+                    if(pieceMove(myKing).contains(moveEvent))
+                    {
+                        cell = moveEvent.target;
+                    }
+                }
+            });
+
+
+        }
+
+        bp.registerBThread("Detect " + otherColor + " Win", function () {
+            var cell = initCell;
+            var myKing = king;
+            var otherColorGroup = otherColor;
+            var moveEvent;
+
+            while(true)
+            {
+                moveEvent = bp.sync({waitFor: [moveTo(cell),pieceMove(myKing)]
+                });
+
+                if(pieceMove(myKing).contains(moveEvent)) cell = moveEvent.target;
+                else
+                {
+                    bp.sync({request: bp.Event("Game Over - " + otherColorGroup + " Wins")});
+                    bp.sync({block:moves});
+                }
+            }
+        });
+
+
+    }
+});
+//</editor-fold>
+
+//<editor-fold desc="Knight Rules">
+bp.registerBThread("knight rules", function ()
+{
+    while (true)
+    {
+        var knightCreationEvent = bp.sync({waitFor:knightCreation}).data;
+
+        var knight = knightCreationEvent.piece;
+        var initCell = knightCreationEvent.cell;
+        var colorGroup = knight.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
+
+        if(autoMovesBlack && (knight.color.equals(Piece.Color.Black)) || (autoMovesWhite && knight.color.equals(Piece.Color.White)))
+        {
+            bp.registerBThread(knight + " Movement", function() {
+                var cell = initCell;
+                var myKnight = knight;
+                var myColorGroup = colorGroup;
+
+                while(true)
+                {
+                    bp.sync({waitFor:startTurnEvent(myKnight), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+
+                    var optionalMoves = [];
+                    optionalMoves.push(Move(cell, Cell(cell.row - 1, cell.column - 2), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row - 2, cell.column - 1), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row - 2, cell.column + 1), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row - 1, cell.column + 2), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row + 1, cell.column - 2), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row + 2, cell.column - 1), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row + 1, cell.column + 2), myKnight));
+                    optionalMoves.push(Move(cell, Cell(cell.row + 2, cell.column + 1), myKnight));
+
+
+                    //bp.log.info("M: " + optionalMoves);
+                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
+                    if(pieceMove(myKnight).contains(moveEvent))
+                    {
+                        cell = moveEvent.target;
+                    }
+                }
+            });
+        }
+    }
+});
+//</editor-fold>
