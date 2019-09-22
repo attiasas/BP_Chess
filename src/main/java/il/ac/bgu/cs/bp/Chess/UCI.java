@@ -382,6 +382,7 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             ArrayList<String> programNames = new ArrayList<>();
             programNames.add("PopulateBoard.js");
             programNames.add("rules_no_context.js");
+            programNames.add("verification.js");
             //programNames.add("No_Context_Chess_Program.js");
 
             bProgram = new ResourceBProgram(programNames,"ChessProgram",new SimpleEventSelectionStrategy());//,new PrioritizedBThreadsEventSelectionStrategy());

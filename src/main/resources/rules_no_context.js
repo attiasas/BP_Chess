@@ -5,6 +5,10 @@ var autoMovesWhite = true;
 //<editor-fold desc="Global Events and Sets">
 
 //<editor-fold desc="Creation Functions And Sets">
+var initComplete = bp.EventSet("", function (e) {
+    return e.name.equals("Done Populate");
+});
+
 var pieceCreation = bp.EventSet("", function (e) {
     return e.name.equals("Create");
 });
@@ -83,6 +87,10 @@ var outBoundsMoves = bp.EventSet("",function (e) {
     return moves.contains(e) && (e.source.row < 0 || e.source.row > 7 || e.source.column < 0 || e.source.column > 7 || e.target.row < 0 || e.target.row > 7 || e.target.column < 0 || e.target.column > 7);
 });
 
+var staticMoves = bp.EventSet("Non Moves",function (e) {
+    return moves.contains(e) && e.source.equals(e.target);
+});
+
 function startTurnEvent(piece) {
     return bp.Event(piece.color + " Turn");
 }
@@ -105,6 +113,13 @@ bp.registerBThread("Movement in bounds",function () {
    while (true)
    {
        bp.sync({block:outBoundsMoves});
+   }
+});
+
+bp.registerBThread("Enforce Movement to a new cell", function () {
+   while(true)
+   {
+        bp.sync({block:staticMoves});
    }
 });
 
@@ -478,3 +493,114 @@ bp.registerBThread("knight rules", function ()
     }
 });
 //</editor-fold>
+
+//<editor-fold desc="Rook Rules">
+bp.registerBThread("rook rules", function ()
+{
+    while (true)
+    {
+        var rookCreationEvent = bp.sync({waitFor:rookCreation}).data;
+
+        var rook = rookCreationEvent.piece;
+        var initCell = rookCreationEvent.cell;
+        var colorGroup = rook.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
+
+        if(autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White)))
+        {
+            bp.registerBThread(rook + " Movement", function() {
+                var cell = initCell;
+                var myRook = rook;
+                var myColorGroup = colorGroup;
+
+                while(true)
+                {
+                    bp.sync({waitFor:startTurnEvent(myRook), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+
+                    var optionalMoves = [];
+
+                    // vertical
+                    for(var row = 0; row < 8; row++)
+                    {
+                        if(row != cell.row) optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
+                    }
+                    // horizontal
+                    for(var col = 0; col < 8; col++)
+                    {
+                        if(col != cell.column) optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
+                    }
+
+                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
+                    if(pieceMove(myRook).contains(moveEvent))
+                    {
+                        cell = moveEvent.target;
+                    }
+                }
+            });
+        }
+
+        bp.registerBThread(rook + " can't move to blocked path", function ()
+        {
+            var cell = initCell;
+            var myRook = rook;
+            var moveEvent;
+            var indexRow;
+            var indexColumn;
+
+            var board = bp.sync({waitFor:initComplete}).data;
+
+            while (true)
+            {
+                // get blocked path moves
+                var movesToBlock = [];
+
+                indexRow = cell.row - 1; // bottom
+                while (indexRow >= 0 && board[indexRow][cell.column] === null) indexRow--;
+                indexRow--;
+                while(indexRow >= 0)
+                {
+                    movesToBlock.push(Move(cell,Cell(indexRow,cell.column),myRook));
+                    indexRow--;
+                }
+
+                indexRow = cell.row + 1; // top
+                while (indexRow < 8 && board[indexRow][cell.column] === null) indexRow++;
+                indexRow++;
+                while (indexRow < 8)
+                {
+                    movesToBlock.push(Move(cell,Cell(indexRow,cell.column),myRook));
+                    indexRow++;
+                }
+
+                indexColumn = cell.column - 1; // left
+                while (indexColumn >= 0 && board[cell.row][indexColumn] === null) indexColumn--;
+                indexColumn--;
+                while (indexColumn >= 0)
+                {
+                    movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
+                    indexColumn--;
+                }
+
+                indexColumn = cell.column + 1; // right
+                while (indexColumn < 8 && board[cell.row][indexColumn] === null) indexColumn++;
+                indexColumn++;
+                while (indexColumn < 8)
+                {
+                    movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
+                    indexColumn++;
+                }
+                movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
+
+                bp.log.info("Blocking: " + movesToBlock);
+                moveEvent = bp.sync({block:movesToBlock,waitFor:moves});
+
+                // update board position and rook cell
+                board[moveEvent.source.row][moveEvent.source.column] = null;
+                board[moveEvent.target.row][moveEvent.target.column] = moveEvent.piece;
+                if(pieceMove(myRook).contains(moveEvent)) cell = moveEvent.target;
+            }
+        });
+
+    }
+});
+//</editor-fold>
+
