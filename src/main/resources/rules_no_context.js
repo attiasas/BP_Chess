@@ -99,28 +99,37 @@ function startTurnEvent(piece) {
 //</editor-fold>
 
 //<editor-fold desc="General Rules">
+bp.registerBThread("UpdateStateAfterMove", function () {
+    // init board
+    var board;
+    //update board
+    bp.sync({request: bp.Event("StateUpdate", {"board":board,"lastMove":null})});
+
+    while (true){
+        var e = bp.sync({waitFor:moves});
+        bp.sync({request: bp.Evet("StateUpdate", {"board":board, "lastMove": e})});
+    }
+});
+
+
 bp.registerBThread("EnforceTurns",function () {
     while (true)
     {
         bp.sync({waitFor:whiteMoves,block:blackMoves});
+        bp.sync({waitFor:stateUpdate, block:EventSets.AllExcept(stateUpdate)});
         //bp.log.info("White move found, waiting for black");
         bp.sync({waitFor:blackMoves,block:whiteMoves});
+        bp.sync({waitFor:stateUpdate, block:EventSets.AllExcept(stateUpdate)});
         //bp.log.info("Black move found, waiting for white");
     }
 });
 
 bp.registerBThread("Movement in bounds",function () {
-   while (true)
-   {
-       bp.sync({block:outBoundsMoves});
-   }
+    bp.sync({block:outBoundsMoves});
 });
 
 bp.registerBThread("Enforce Movement to a new cell", function () {
-   while(true)
-   {
-        bp.sync({block:staticMoves});
-   }
+    bp.sync({block:staticMoves});
 });
 
 bp.registerBThread("don't move if eaten ", function() {
@@ -202,12 +211,12 @@ bp.registerBThread("pawn rules", function(){
 
                 while(true) {
                     //bp.log.info(myPawn + " is Waiting for: " + startTurn);
-                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    //bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
                     var nextCell = Cell(cell.row + myForward, cell.column);
                     var myMove = Move(cell, nextCell, myPawn);
 
-                    var moveEvent = bp.sync({ request: myMove, waitFor: myColorGroup});
+                    var moveEvent = bp.sync({ request: myMove, interrupt:moveTo(cell)});
                     if(pieceMove(myPawn).contains(moveEvent))
                     {
                         cell = moveEvent.target;
@@ -222,17 +231,18 @@ bp.registerBThread("pawn rules", function(){
                 var myForward = forward;
                 var myColorGroup = colorGroup;
 
-                while (true)
-                {
-                    //bp.log.info(myPawn + " waiting start, interrupt from: " + cell);
-                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
-                    //bp.log.info(myPawn + " request double move, interrupt from: " + myPawn);
-                    bp.sync({
-                        request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
-                        waitFor: myColorGroup,
-                        interrupt: pieceMove(myPawn)
-                    });
-                }
+                bp.sync({
+                    request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
+                    interrupt: pieceMove(myPawn)
+                });
+
+                // while (true)
+                // {
+                //     //bp.log.info(myPawn + " waiting start, interrupt from: " + cell);
+                //     bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                //     //bp.log.info(myPawn + " request double move, interrupt from: " + myPawn);
+                //
+                // }
             });
 
             /*bp.registerBThread("pawn eat " + piece, function() {
@@ -251,18 +261,19 @@ bp.registerBThread("pawn rules", function(){
                 var myForward = forward;
 
                 while(true) {
-
-                    bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
-
+                    var state = bp.sync({waitFor:stateUpdate}).data;
+                    if(pieceMove(myPawn).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
                     var nextCell1 = Cell(cell.row + myForward, cell.column + 1);
                     var nextCell2 = Cell(cell.row + myForward, cell.column - 1);
 
+                    // check in state.board if these cells has enemies - then eat
+
                     var moveEvent = bp.sync({ request: [Move(cell, nextCell1, myPawn), Move(cell, nextCell2, myPawn)],
                         waitFor: myColorGroup});
-                    if(pieceMove(myPawn).contains(moveEvent))
-                    {
-                        cell = moveEvent.target;
-                    }
+
                 }
             });
         }
