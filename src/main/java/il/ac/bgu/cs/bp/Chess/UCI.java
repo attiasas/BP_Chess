@@ -11,6 +11,7 @@ import il.ac.bgu.cs.bp.bpjs.model.BProgram;
 import il.ac.bgu.cs.bp.bpjs.model.ResourceBProgram;
 import il.ac.bgu.cs.bp.bpjs.model.eventselection.SimpleEventSelectionStrategy;
 import org.mozilla.javascript.NativeArray;
+import org.mozilla.javascript.NativeObject;
 
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -36,6 +37,7 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
     private static final String AUTHOR = "Assaf Attias";
 
     private boolean turn = true; // debug
+    private int moveCount = 0; // debug
 
     /**
      * Constructor
@@ -122,6 +124,7 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             }
             //System.out.println("Done Update UCI");
             ready = true;
+            moveCount = 0;
         }
 
         if(theEvent.name.contains("Wins")) quitGame();
@@ -134,6 +137,43 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             }
             ((Move)theEvent).updateBoard(pieceBoard);
             turn = !turn;
+        }
+
+        if(theEvent.name.equals("StateUpdate"))
+        {
+            Move theMove = (Move)((NativeObject)theEvent.getDataField().get()).values().toArray()[1];
+            String s = "TheMove: " + theMove + " (num: "+ (++moveCount) +")\n" + "TheBoard:" + "\n";
+            NativeArray board = (NativeArray)((NativeObject)theEvent.getDataField().get()).values().toArray()[0];
+
+            for(int row = board.size() - 1; row >= 0 ; row--) {
+                for (int column = 0; column < ((NativeArray) board.get(row)).size(); column++) {
+
+                    if(column == 0) s += (row + 1) + " |";
+                    else s += "|";
+
+                    if (((NativeArray) board.get(row)).get(column) instanceof Piece) {
+                        Piece p = (Piece)((NativeArray) board.get(row)).get(column);
+                        switch (p.type)
+                        {
+                            case Pawn: if(p.color.equals(Piece.Color.White)) s += "w|"/*"p|"*/; else s += "l|"/*"P|"*/; break;
+                            case Knight: if(p.color.equals(Piece.Color.White)) s += "n|"; else s += "N|"; break;
+                            case Bishop: if(p.color.equals(Piece.Color.White)) s += "b|"; else s += "B|"; break;
+                            case Rook: if(p.color.equals(Piece.Color.White)) s += "r|"; else s += "R|"; break;
+                            case Queen: if(p.color.equals(Piece.Color.White)) s += "q|"; else s += "Q|"; break;
+                            case King: if(p.color.equals(Piece.Color.White)) s += "k|"; else s += "K|"; break;
+                        }
+                    }
+                    else s += " |";
+
+                    if(column == ((NativeArray)board.get(row)).size() - 1) s += " " + (row + 1);
+                }
+                s += "\n";
+            }
+
+            s += "  ";
+            for(char pChar = 'a'; pChar < 'i'; pChar++) s += " " + pChar + " ";
+
+            System.out.println(s);
         }
     }
 

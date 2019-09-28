@@ -74,6 +74,7 @@ bp.registerBThread("piece verification",function () {
 
                 if(pieceMove(myPiece).contains(event)) cell = event.target;
                 else if(myPiece.color.equals(event.piece.color)) bp.ASSERT(false,myPiece + " was eaten by a piece (" + event.piece + ") with the same color.");
+                else break;
             }
         });
 
@@ -139,30 +140,25 @@ bp.registerBThread("Rook Movement verification",function ()
         return moves.contains(e) && e.piece.type.equals(Piece.Type.Rook);
     });
 
-    var board = bp.sync({waitFor:initComplete}).data;
-
     while (true)
     {
-        var moveEvent = bp.sync({waitFor:moves});
+        var state = bp.sync({waitFor:stateUpdate}).data;
+        var board = state.board;
 
-        if(rookMovement.contains(moveEvent))
+        if(rookMovement.contains(state.lastMove))
         {
-            var checkIndex = moveEvent.source.row != moveEvent.target.row ? moveEvent.target.row : moveEvent.target.column;
-            var checkTargetIndex = moveEvent.source.row != moveEvent.target.row ? moveEvent.source.row : moveEvent.source.column;
-            var delta = checkIndex < checkTargetIndex ? 1 : -1;;
+            var checkIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.target.row : state.lastMove.target.column;
+            var checkTargetIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.source.row : state.lastMove.source.column;
+            var delta = checkIndex < checkTargetIndex ? 1 : -1;
             while (checkIndex + delta !== checkTargetIndex)
             {
-                var current = moveEvent.source.row != moveEvent.target.row ? board[checkIndex + delta][moveEvent.source.column] : board[moveEvent.source.row][checkIndex + delta];
+                var current = state.lastMove.source.row != state.lastMove.target.row ? board[checkIndex + delta][state.lastMove.source.column] : board[state.lastMove.source.row][checkIndex + delta];
 
-                if(current !== null) bp.ASSERT(false,moveEvent.piece + " Movement is not by definition.");
+                if(current !== null) bp.ASSERT(false,state.lastMove.piece + " Movement is not by definition.");
 
                 delta += checkIndex < checkTargetIndex ? 1 : -1;
             }
         }
-
-        // update board
-        board[moveEvent.source.row][moveEvent.source.column] = null;
-        board[moveEvent.target.row][moveEvent.target.column] = moveEvent.piece;
     }
 });
 

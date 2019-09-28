@@ -71,6 +71,10 @@ function pieceMove(piece) {
 //</editor-fold>
 
 //<editor-fold desc="Global Move Sets">
+var stateUpdate = bp.EventSet("",function (e) {
+    return e.name.equals("StateUpdate");
+});
+
 var moves = bp.EventSet("Game Moves", function (e) {
     return (e instanceof Move);
 });
@@ -91,9 +95,11 @@ var staticMoves = bp.EventSet("Non Moves",function (e) {
     return moves.contains(e) && e.source.equals(e.target);
 });
 
-function startTurnEvent(piece) {
-    return bp.Event(piece.color + " Turn");
-}
+// not exist -> bp.EventSet.allExcept(stateUpdate)
+var allExceptStateUpdate = bp.EventSet("", function (e) {
+    return !stateUpdate.contains(e);
+});
+
 //</editor-fold>
 
 //</editor-fold>
@@ -101,26 +107,28 @@ function startTurnEvent(piece) {
 //<editor-fold desc="General Rules">
 bp.registerBThread("UpdateStateAfterMove", function () {
     // init board
-    var board;
-    //update board
-    bp.sync({request: bp.Event("StateUpdate", {"board":board,"lastMove":null})});
+    var board = bp.sync({waitFor:initComplete, block:moves}).data;
+    bp.sync({request: bp.Event("StateUpdate", {board:board,lastMove:null}),block:moves});
 
     while (true){
         var e = bp.sync({waitFor:moves});
-        bp.sync({request: bp.Evet("StateUpdate", {"board":board, "lastMove": e})});
+        //update board
+        board[e.source.row][e.source.column] = null;
+        board[e.target.row][e.target.column] = e.piece;
+
+        bp.sync({request: bp.Event("StateUpdate", {board:board, lastMove: e})});
     }
 });
 
-
 bp.registerBThread("EnforceTurns",function () {
+
     while (true)
     {
         bp.sync({waitFor:whiteMoves,block:blackMoves});
-        bp.sync({waitFor:stateUpdate, block:EventSets.AllExcept(stateUpdate)});
-        //bp.log.info("White move found, waiting for black");
+        bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
+
         bp.sync({waitFor:blackMoves,block:whiteMoves});
-        bp.sync({waitFor:stateUpdate, block:EventSets.AllExcept(stateUpdate)});
-        //bp.log.info("Black move found, waiting for white");
+        bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
     }
 });
 
@@ -140,10 +148,11 @@ bp.registerBThread("don't move if eaten ", function() {
 
         bp.registerBThread("don't move if eaten " + piece, function() {
             var cell = initCell;
+            var myPiece = piece;
             while(true) {
-                var e = bp.sync({waitFor: [pieceMove(piece), moveTo(cell)] });
+                var e = bp.sync({waitFor: [pieceMove(myPiece), moveTo(cell)] });
                 if(e.target.equals(cell)) {
-                    bp.sync({block:pieceMove(piece)});
+                    bp.sync({block:pieceMove(myPiece)});
                 } else {
                     cell = e.target;
                 }
@@ -163,7 +172,6 @@ function cellRules() {
                 while(true) {
                     if(piece === null)
                     {
-                        //bp.log.info("Enter to " + cell + " | E: " + e);
                         e = bp.sync({waitFor: [moveTo(cell), pieceCreationInCell(cell)]});
 
                         if(e instanceof Move) piece = e.piece;
@@ -171,7 +179,6 @@ function cellRules() {
                     }
                     else
                     {
-                        //bp.log.info("Blocking move to " + cell + " | Piece in cell: " + piece);
                         e = bp.sync({waitFor: [moveTo(cell),moveFrom(cell)], block: moveToWithColor(cell, piece.color)});
 
                         piece = (moveTo(cell).contains(e)) ? e.piece : null;
@@ -185,207 +192,112 @@ function cellRules() {
 }
 
 cellRules();
+
+function inRange(row,column)
+{
+    return row >= 0 && row < 8 && column >= 0 && column < 8
+}
 //</editor-fold>
 
+//TODO: (KING) Rule: "If a player's king is placed in check and there is no legal move that player can make to escape check, then the king is said to be checkmated, the game ends.
+// (If it is not possible to get out of check, the king is checkmated and the game is over)"
+
+//TODO: (KING) Rule: "A king is in check when it is under attack by at least one enemy piece."
+//TODO: (GENERAL) Rule: "It is illegal to make a move that places or leaves one's king in check."
+//TODO: Rule: "Castling consists of moving the king two squares towards a rook, then placing the rook on the other side of the king, adjacent to it."
+// * The king and rook involved in castling must not have previously moved
+// * There must be no pieces between the king and the rook
+// * The king may not currently be in check, nor may the king pass through or end up in a square that is under attack by an enemy piece
+//TODO: (PAWN) Rule: "En passant - When a pawn advances two squares from its original square and ends the turn adjacent to a pawn of the opponent's on the same rank, it may be captured by that pawn of the opponent's, as if it had moved only one square forward."
+// * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
+
+//TODO: (BISHOP) Rule: "A bishop moves any number of vacant squares diagonally."
+//TODO: (QUEEN) Rule: "The queen moves any number of vacant squares horizontally, vertically, or diagonally."
 
 //<editor-fold desc="Pawn Rules">
 bp.registerBThread("pawn rules", function(){
     while (true)
     {
-        //bp.log.info("WaitFor Creation");
         var pawnCreationEvent = bp.sync({waitFor:pawnCreation}).data;
-        //bp.log.info("Creating rules for: " + pawnCreationEvent.piece);
 
         var pawn = pawnCreationEvent.piece;
         var initCell = pawnCreationEvent.cell;
         var forward = pawn.color.equals(Piece.Color.Black) ? -1 : 1;
-        var colorGroup = pawn.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
 
         if(autoMovesBlack && (pawn.color.equals(Piece.Color.Black)) || (autoMovesWhite && pawn.color.equals(Piece.Color.White)))
         {
-            bp.registerBThread("move " + pawn + " one forward ", function() {
+            // Rule: "A pawn moves straight forward one square, if that square is vacant."
+            bp.registerBThread("move " + pawn + " one forward ", function()
+            {
                 var cell = initCell;
                 var myPawn = pawn;
                 var myForward = forward;
-                var myColorGroup = colorGroup;
 
                 while(true) {
-                    //bp.log.info(myPawn + " is Waiting for: " + startTurn);
-                    //bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
 
-                    var nextCell = Cell(cell.row + myForward, cell.column);
-                    var myMove = Move(cell, nextCell, myPawn);
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
 
-                    var moveEvent = bp.sync({ request: myMove, interrupt:moveTo(cell)});
-                    if(pieceMove(myPawn).contains(moveEvent))
+                    if(pieceMove(myPawn).contains(state.lastMove))
                     {
-                        cell = moveEvent.target;
+                        cell = state.lastMove.target;
+                    }
+
+                    if(inRange(cell.row + myForward,cell.column) && state.board[cell.row + myForward][cell.column] === null) // in Range
+                    {
+                        var myMove = Move(cell, Cell(cell.row + myForward, cell.column), myPawn);
+                        bp.sync({ request: myMove, waitFor:moves, interrupt:moveTo(cell)});
                     }
                 }
             });
 
+            // Rule: "If it has not yet moved, a pawn also has the option of moving two squares straight forward, provided both squares are vacant."
             bp.registerBThread("move " + pawn + " two forward", function()
             {
                 var cell = initCell;
                 var myPawn = pawn;
                 var myForward = forward;
-                var myColorGroup = colorGroup;
 
-                bp.sync({
-                    request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
-                    interrupt: pieceMove(myPawn)
-                });
+                while (true)
+                {
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:[moveTo(cell),pieceMove(myPawn)]}).data;
 
-                // while (true)
-                // {
-                //     //bp.log.info(myPawn + " waiting start, interrupt from: " + cell);
-                //     bp.sync({waitFor:startTurnEvent(myPawn), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
-                //     //bp.log.info(myPawn + " request double move, interrupt from: " + myPawn);
-                //
-                // }
+                    if(state.board[cell.row + myForward][cell.column] === null && state.board[cell.row + myForward*2][cell.column] === null)
+                    {
+                        bp.sync({
+                            request: Move(cell, Cell(cell.row + myForward*2, cell.column),myPawn),
+                            waitFor:moves,
+                            interrupt: [pieceMove(myPawn),moveTo(Cell)]
+                        });
+                    }
+                }
             });
 
-            /*bp.registerBThread("pawn eat " + piece, function() {
-                var cell = initCell;
-                while(true) {
-                    var nextCell = Cell(cell.row + forward, cell.col);
-                    bp.sync({ request: Move(cell, nextCell) });
-                    cell = nextCell;
-                }
-            });*/
-
+            // Rule: "A pawn can capture an enemy piece on either of the two squares diagonally in front of the pawn (but cannot move to those squares if they are vacant)."
             bp.registerBThread(pawn + " Eat Movement", function() {
                 var cell = initCell;
                 var myPawn = pawn;
-                var myColorGroup = colorGroup;
                 var myForward = forward;
 
-                while(true) {
-                    var state = bp.sync({waitFor:stateUpdate}).data;
+                while(true)
+                {
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
+
                     if(pieceMove(myPawn).contains(state.lastMove))
                     {
                         cell = state.lastMove.target;
                     }
-                    var nextCell1 = Cell(cell.row + myForward, cell.column + 1);
-                    var nextCell2 = Cell(cell.row + myForward, cell.column - 1);
+
+                    var optionalMoves = [];
+                    var currentBoard = state.board;
 
                     // check in state.board if these cells has enemies - then eat
+                    if(inRange(cell.row + myForward,cell.column + 1) && currentBoard[cell.row + myForward][cell.column + 1] !== null) optionalMoves.push(Move(cell, Cell(cell.row + myForward, cell.column + 1), myPawn));
+                    if(inRange(cell.row + myForward,cell.column - 1) && currentBoard[cell.row + myForward][cell.column - 1] !== null) optionalMoves.push(Move(cell, Cell(cell.row + myForward, cell.column - 1), myPawn));
 
-                    var moveEvent = bp.sync({ request: [Move(cell, nextCell1, myPawn), Move(cell, nextCell2, myPawn)],
-                        waitFor: myColorGroup});
-
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
             });
         }
-
-        function pawnCellRules() {
-            var i,j;
-            for(i = 0 ; i < 8; i++) {
-                for(j = 0 ; j < 8; j++) {(function (i,j) {
-                    var cell = Cell(i,j);
-
-                    bp.registerBThread(pawn + " can move only to empty " + cell,function () {
-                        var pawnRow = initCell.row;
-                        var pawnColumn = initCell.column;
-                        var myPawn = pawn;
-                        var piece = null;
-                        var myForward = forward;
-                        var moveEvent;
-                        var nextCell1;
-                        var nextCell2;
-
-                        while (true)
-                        {
-                            nextCell1 = Cell(pawnRow + myForward, pawnColumn);
-                            nextCell2 = Cell(pawnRow + 2 * myForward, pawnColumn);
-                            if(piece !== null && (cell.equals(nextCell1) || cell.equals(nextCell2)))
-                            {
-                                moveEvent = bp.sync({waitFor: [moveFrom(cell), moveTo(cell),pieceMove(myPawn)],
-                                    block: moveToWithPiece(cell,myPawn)});
-
-                                // track pawn location
-                                if(pieceMove(myPawn).contains(moveEvent))
-                                {
-                                    pawnRow = moveEvent.target.row;
-                                    pawnColumn = moveEvent.target.column;
-                                }
-
-                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
-                            }
-                            else
-                            {
-                                moveEvent = bp.sync({
-                                    waitFor: [moveFrom(cell),moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)]
-                                });
-
-                                // track pawn location
-                                if(pieceMove(myPawn).contains(moveEvent))
-                                {
-                                    pawnRow = moveEvent.target.row;
-                                    pawnColumn = moveEvent.target.column;
-                                }
-
-                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
-                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
-                                //bp.log.info(cell + " is occupied by: " + piece);
-                            }
-                        }
-                    });
-
-                    bp.registerBThread(pawn + " don't eat empty " + cell, function() {
-                        var pawnRow = initCell.row;
-                        var pawnColumn = initCell.column;
-                        var myPawn = pawn;
-                        var myForward = forward;
-                        var piece = null;
-                        var moveEvent;
-                        var nextCell1;
-                        var nextCell2;
-
-                        while(true) {
-                            nextCell1 = Cell(pawnRow + myForward, pawnColumn + 1);
-                            nextCell2 = Cell(pawnRow + myForward, pawnColumn - 1);
-                            //bp.log.info(cell + " is occupied by: " + piece + " | tracking " + myPawn + " at: [row=" + pawnRow + ", col=" + pawnColumn + "]");
-                            if(piece === null && (cell.equals(nextCell1) || cell.equals(nextCell2))) {
-                                //bp.log.info(cell + " is empty waiting for move and blocking " + myPawn + " [" + pawnRow + "," + pawnColumn + "] moving to this cell");
-                                moveEvent = bp.sync({
-                                    waitFor: [moveTo(cell), pieceCreationInCell(cell),pieceMove(myPawn)],
-                                    block: moveToWithPiece(cell,myPawn)
-                                });
-
-                                // track pawn location
-                                if(pieceMove(myPawn).contains(moveEvent))
-                                {
-                                    pawnRow = moveEvent.target.row;
-                                    pawnColumn = moveEvent.target.column;
-                                }
-
-                                if(moveTo(cell).contains(moveEvent)) piece = moveEvent.piece;
-                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
-                                //bp.log.info(cell + " is occupied by: " + piece);
-
-                            } else {
-                                //bp.log.info(cell + " occupied by " + piece + " movement allowed to: " + myPawn);
-                                moveEvent = bp.sync({waitFor: [moveFrom(cell), pieceCreationInCell(cell), moveTo(cell),pieceMove(myPawn)]});
-
-                                // track pawn location
-                                if(pieceMove(myPawn).contains(moveEvent))
-                                {
-                                    pawnRow = moveEvent.target.row;
-                                    pawnColumn = moveEvent.target.column;
-                                }
-
-                                if(moveFrom(cell).contains(moveEvent) || moveTo(cell).contains(moveEvent)) piece = (moveEvent.target.equals(cell)) ? moveEvent.piece : null;
-                                else if(!pieceMove(myPawn).contains(moveEvent)) piece = moveEvent.data.piece;
-                            }
-                        }
-                    });
-                })(i,j);
-                }
-            }
-        }
-
-        pawnCellRules();
     }
 });
 //</editor-fold>
@@ -399,39 +311,36 @@ bp.registerBThread("king rules", function ()
 
         var king = kingCreationEvent.piece;
         var initCell = kingCreationEvent.cell;
-        var colorGroup = king.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
         var otherColor = king.color.equals(Piece.Color.White) ? Piece.Color.Black : Piece.Color.White;
 
         if(autoMovesBlack && (king.color.equals(Piece.Color.Black)) || (autoMovesWhite && king.color.equals(Piece.Color.White)))
         {
+            // Rule: "The king moves exactly one square horizontally, vertically, or diagonally."
             bp.registerBThread(king + " Movement", function() {
                 var cell = initCell;
                 var myKing = king;
-                var myColorGroup = colorGroup;
 
                 while(true)
                 {
-                    bp.sync({waitFor:startTurnEvent(myKing), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
+
+                    if(pieceMove(myKing).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
 
                     var optionalMoves = [];
                     for(var row = cell.row - 1; row <= cell.row + 1; row++)
                     {
                         for(var col = cell.column - 1; col <= cell.column + 1; col++)
                         {
-                            if(cell.row != row || cell.column != col) optionalMoves.push(Move(cell, Cell(row, col), myKing));
+                            if(inRange(row,col) && (cell.row != row || cell.column != col)) optionalMoves.push(Move(cell, Cell(row, col), myKing));
                         }
                     }
 
-                    //bp.log.info("M: " + optionalMoves);
-                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
-                    if(pieceMove(myKing).contains(moveEvent))
-                    {
-                        cell = moveEvent.target;
-                    }
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
             });
-
-
         }
 
         bp.registerBThread("Detect " + otherColor + " Win", function () {
@@ -448,13 +357,11 @@ bp.registerBThread("king rules", function ()
                 if(pieceMove(myKing).contains(moveEvent)) cell = moveEvent.target;
                 else
                 {
-                    bp.sync({request: bp.Event("Game Over - " + otherColorGroup + " Wins")});
+                    bp.sync({request: bp.Event("Game Over - " + otherColorGroup + " Wins"),block:moves});
                     bp.sync({block:moves});
                 }
             }
         });
-
-
     }
 });
 //</editor-fold>
@@ -468,18 +375,22 @@ bp.registerBThread("knight rules", function ()
 
         var knight = knightCreationEvent.piece;
         var initCell = knightCreationEvent.cell;
-        var colorGroup = knight.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
 
         if(autoMovesBlack && (knight.color.equals(Piece.Color.Black)) || (autoMovesWhite && knight.color.equals(Piece.Color.White)))
         {
+            // Rule: "A knight moves to the nearest square not on the same rank, file, or diagonal. (i.e. in an "L" pattern)"
             bp.registerBThread(knight + " Movement", function() {
                 var cell = initCell;
                 var myKnight = knight;
-                var myColorGroup = colorGroup;
 
                 while(true)
                 {
-                    bp.sync({waitFor:startTurnEvent(myKnight), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
+
+                    if(pieceMove(myKnight).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
 
                     var optionalMoves = [];
                     optionalMoves.push(Move(cell, Cell(cell.row - 1, cell.column - 2), myKnight));
@@ -491,13 +402,7 @@ bp.registerBThread("knight rules", function ()
                     optionalMoves.push(Move(cell, Cell(cell.row + 1, cell.column + 2), myKnight));
                     optionalMoves.push(Move(cell, Cell(cell.row + 2, cell.column + 1), myKnight));
 
-
-                    //bp.log.info("M: " + optionalMoves);
-                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
-                    if(pieceMove(myKnight).contains(moveEvent))
-                    {
-                        cell = moveEvent.target;
-                    }
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
             });
         }
@@ -514,104 +419,84 @@ bp.registerBThread("rook rules", function ()
 
         var rook = rookCreationEvent.piece;
         var initCell = rookCreationEvent.cell;
-        var colorGroup = rook.color.equals(Piece.Color.White) ? whiteMoves : blackMoves;
 
         if(autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White)))
         {
+            // Rule: "A rook moves any number of vacant squares horizontally or vertically."
             bp.registerBThread(rook + " Movement", function() {
                 var cell = initCell;
                 var myRook = rook;
-                var myColorGroup = colorGroup;
 
                 while(true)
                 {
-                    bp.sync({waitFor:startTurnEvent(myRook), interrupt:moveTo(cell)}); // wait for turn and kill if piece eaten
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
+
+                    if(pieceMove(myRook).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
 
                     var optionalMoves = [];
 
-                    // vertical
-                    for(var row = 0; row < 8; row++)
+                    // bottom
+                    for(var row = cell.row - 1; row >= 0; row--)
                     {
-                        if(row != cell.row) optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
+                        optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
+                        if(state.board[row][cell.column] !== null) break;
                     }
-                    // horizontal
-                    for(var col = 0; col < 8; col++)
+                    // top
+                    for(var row = cell.row + 1; row < 8; row++)
                     {
-                        if(col != cell.column) optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
+                        optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
+                        if(state.board[row][cell.column] !== null) break;
+                    }
+                    // left
+                    for(var col = cell.column - 1; col >= 0; col--)
+                    {
+                        optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
+                        if(state.board[cell.row][col] !== null) break;
+                    }
+                    // right
+                    for(var col = cell.column + 1; col < 8; col++)
+                    {
+                        optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
+                        if(state.board[cell.row][col] !== null) break;
                     }
 
-                    var moveEvent = bp.sync({ request: optionalMoves, waitFor: myColorGroup});
-                    if(pieceMove(myRook).contains(moveEvent))
-                    {
-                        cell = moveEvent.target;
-                    }
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
             });
         }
-
-        bp.registerBThread(rook + " can't move to blocked path", function ()
-        {
-            var cell = initCell;
-            var myRook = rook;
-            var moveEvent;
-            var indexRow;
-            var indexColumn;
-
-            var board = bp.sync({waitFor:initComplete}).data;
-
-            while (true)
-            {
-                // get blocked path moves
-                var movesToBlock = [];
-
-                indexRow = cell.row - 1; // bottom
-                while (indexRow >= 0 && board[indexRow][cell.column] === null) indexRow--;
-                indexRow--;
-                while(indexRow >= 0)
-                {
-                    movesToBlock.push(Move(cell,Cell(indexRow,cell.column),myRook));
-                    indexRow--;
-                }
-
-                indexRow = cell.row + 1; // top
-                while (indexRow < 8 && board[indexRow][cell.column] === null) indexRow++;
-                indexRow++;
-                while (indexRow < 8)
-                {
-                    movesToBlock.push(Move(cell,Cell(indexRow,cell.column),myRook));
-                    indexRow++;
-                }
-
-                indexColumn = cell.column - 1; // left
-                while (indexColumn >= 0 && board[cell.row][indexColumn] === null) indexColumn--;
-                indexColumn--;
-                while (indexColumn >= 0)
-                {
-                    movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
-                    indexColumn--;
-                }
-
-                indexColumn = cell.column + 1; // right
-                while (indexColumn < 8 && board[cell.row][indexColumn] === null) indexColumn++;
-                indexColumn++;
-                while (indexColumn < 8)
-                {
-                    movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
-                    indexColumn++;
-                }
-                movesToBlock.push(Move(cell,Cell(cell.row,indexColumn),myRook));
-
-                bp.log.info("Blocking: " + movesToBlock);
-                moveEvent = bp.sync({block:movesToBlock,waitFor:moves});
-
-                // update board position and rook cell
-                board[moveEvent.source.row][moveEvent.source.column] = null;
-                board[moveEvent.target.row][moveEvent.target.column] = moveEvent.piece;
-                if(pieceMove(myRook).contains(moveEvent)) cell = moveEvent.target;
-            }
-        });
-
     }
 });
 //</editor-fold>
 
+/*//<editor-fold desc="Bishop Rules">
+bp.registerBThread("rook rules", function () {
+    while (true) {
+        var rookCreationEvent = bp.sync({waitFor: rookCreation}).data;
+
+        var rook = rookCreationEvent.piece;
+        var initCell = rookCreationEvent.cell;
+
+        if (autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White))) {
+
+        }
+    }
+});
+//</editor-fold>
+
+//<editor-fold desc="Queen Rules">
+bp.registerBThread("rook rules", function () {
+    while (true) {
+        var rookCreationEvent = bp.sync({waitFor: rookCreation}).data;
+
+        var rook = rookCreationEvent.piece;
+        var initCell = rookCreationEvent.cell;
+
+        if (autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White))) {
+
+        }
+    }
+});
+//</editor-fold>*/
