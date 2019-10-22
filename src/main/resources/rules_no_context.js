@@ -2,8 +2,6 @@
 var autoMovesBlack = true;
 var autoMovesWhite = true;
 
-//<editor-fold desc="Global Events and Sets">
-
 //<editor-fold desc="Creation Functions And Sets">
 var initComplete = bp.EventSet("", function (e) {
     return e.name.equals("Done Populate");
@@ -33,6 +31,14 @@ var kingCreation = bp.EventSet("Create Kings", function (e) {
 
 var knightCreation  = bp.EventSet("Create Knights", function (e) {
     return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Knight);
+});
+
+var bishopCreation  = bp.EventSet("Create Bishops", function (e) {
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Bishop);
+});
+
+var queenCreation  = bp.EventSet("Create Queens", function (e) {
+    return pieceCreation.contains(e) && e.data.piece.type.equals(Piece.Type.Queen);
 });
 //</editor-fold>
 
@@ -75,6 +81,10 @@ var stateUpdate = bp.EventSet("",function (e) {
     return e.name.equals("StateUpdate");
 });
 
+var checkUpdate = bp.EventSet("",function (e) {
+    return e.name.equals("KingInCheckUpdate");
+});
+
 var moves = bp.EventSet("Game Moves", function (e) {
     return (e instanceof Move);
 });
@@ -102,8 +112,6 @@ var allExceptStateUpdate = bp.EventSet("", function (e) {
 
 //</editor-fold>
 
-//</editor-fold>
-
 //<editor-fold desc="General Rules">
 bp.registerBThread("UpdateStateAfterMove", function () {
     // init board
@@ -112,6 +120,7 @@ bp.registerBThread("UpdateStateAfterMove", function () {
 
     while (true){
         var e = bp.sync({waitFor:moves});
+
         //update board
         board[e.source.row][e.source.column] = null;
         board[e.target.row][e.target.column] = e.piece;
@@ -142,9 +151,9 @@ bp.registerBThread("Enforce Movement to a new cell", function () {
 
 bp.registerBThread("don't move if eaten ", function() {
     while(true) {
-        var pieceCreation = bp.sync({waitFor: pieceCreation}).data;
-        var piece = pieceCreation.piece;
-        var initCell = pieceCreation.cell;
+        var createEvent = bp.sync({waitFor:pieceCreation}).data;
+        var piece = createEvent.piece;
+        var initCell = createEvent.cell;
 
         bp.registerBThread("don't move if eaten " + piece, function() {
             var cell = initCell;
@@ -193,26 +202,297 @@ function cellRules() {
 
 cellRules();
 
-function inRange(row,column)
-{
-    return row >= 0 && row < 8 && column >= 0 && column < 8
-}
+// Rule: The game ends in a draw if any of these conditions occur:
+//          king against king
+//          king against king and bishop
+//          king against king and knight
+bp.registerBThread("Detect Draw",function () {
+   while (true)
+   {
+       var state = bp.sync({waitFor:stateUpdate}).data;
+       var whitePieces = [];
+       var blackPieces = [];
+
+       // get pieces
+       for(var row = 0; row < state.board.length; row++)
+       {
+           for(var col = 0; col < state.board[row].length; col++)
+           {
+               if(state.board[row][col] !== null && state.board[row][col].color.equals(Piece.Color.White))
+               {
+                   whitePieces.push(state.board[row][col]);
+               }
+               else if(state.board[row][col] instanceof Piece) blackPieces.push(state.board[row][col]);
+           }
+       }
+
+       // king against king
+       if(whitePieces.length === 1 && blackPieces.length === 1)
+       {
+           bp.sync({request:bp.Event("DrawState"),block:moves});
+           bp.sync({block:moves});
+       }
+       else if((whitePieces.length === 1 || blackPieces.length === 1) && (whitePieces.length === 2 || blackPieces.length === 2))
+       {
+           // king against king and bishop
+           // king against king and knight
+           var notOnlyKing = whitePieces.length === 1 ? blackPieces: whitePieces;
+           var found = false;
+           for(var i = 0; i < notOnlyKing.length && !found; i++)
+           {
+               if(notOnlyKing[i].type.equals(Piece.Type.Bishop) || notOnlyKing[i].type.equals(Piece.Type.Knight)) found = true;
+           }
+
+           if(found)
+           {
+               bp.sync({request:bp.Event("DrawState"),block:moves});
+               bp.sync({block:moves});
+           }
+       }
+   }
+
+});
+
 //</editor-fold>
 
-//TODO: (KING) Rule: "If a player's king is placed in check and there is no legal move that player can make to escape check, then the king is said to be checkmated, the game ends.
-// (If it is not possible to get out of check, the king is checkmated and the game is over)"
-
-//TODO: (KING) Rule: "A king is in check when it is under attack by at least one enemy piece."
-//TODO: (GENERAL) Rule: "It is illegal to make a move that places or leaves one's king in check."
+//TODO: (PAWN) Rule: "En passant - When a pawn advances two squares from its original square and ends the turn adjacent to a pawn of the opponent's on the same rank, it may be captured by that pawn of the opponent's, as if it had moved only one square forward."
+// * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
 //TODO: Rule: "Castling consists of moving the king two squares towards a rook, then placing the rook on the other side of the king, adjacent to it."
 // * The king and rook involved in castling must not have previously moved
 // * There must be no pieces between the king and the rook
 // * The king may not currently be in check, nor may the king pass through or end up in a square that is under attack by an enemy piece
-//TODO: (PAWN) Rule: "En passant - When a pawn advances two squares from its original square and ends the turn adjacent to a pawn of the opponent's on the same rank, it may be captured by that pawn of the opponent's, as if it had moved only one square forward."
-// * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
 
-//TODO: (BISHOP) Rule: "A bishop moves any number of vacant squares diagonally."
-//TODO: (QUEEN) Rule: "The queen moves any number of vacant squares horizontally, vertically, or diagonally."
+//<editor-fold desc="Help Functions">
+function inRange(row,column)
+{
+    return row >= 0 && row < 8 && column >= 0 && column < 8
+}
+
+function containsMove(list,moveToCheck) {
+    if(list === null || moveToCheck === null) return false;
+    for(var i = 0; i < list.length; i++)
+    {
+        if(list[i].equals(moveToCheck)) return true;
+    }
+    return false;
+}
+
+function containsPiece(list,piece) {
+    if(list === null || piece === null) return false;
+    for(var i = 0; i < list.length; i++)
+    {
+        if(list[i].equals(piece)) return true;
+    }
+    return false;
+}
+
+function boardAfterMove(board,move)
+{
+    var res = [];
+
+    if(!inRange(move.target.row,move.target.column)) return board;
+
+    // copy board
+    for(var i = 0; i < board.length; i++)
+    {
+        var row = [];
+        for(var j = 0; j < board[i].length; j++)
+        {
+            row.push(board[i][j]);
+        }
+        res.push(row);
+    }
+
+    //update move
+    res[move.source.row][move.source.column] = null;
+    res[move.target.row][move.target.column] = move.piece;
+
+    return res;
+}
+//</editor-fold>
+
+//<editor-fold desc="Threats">
+function isPieceThreatenedBy(piece,board,optionalThreats) {
+    var myColor = piece.color;
+    var res = false;
+
+    for(var row = 0; row < board.length && !res; row++)
+    {
+        for(var col = 0; col < board[row].length && !res; col++)
+        {
+            if(board[row][col] !== null && !myColor.equals(board[row][col].color) && (optionalThreats === null || containsPiece(optionalThreats,board[row][col])))
+            {
+                switch(board[row][col].type)
+                {
+                    case Piece.Type.Pawn:   res = pawnThreats(Cell(row,col),board,piece); break;
+                    case Piece.Type.Knight: res = knightThreats(Cell(row,col),board,piece); break;
+                    case Piece.Type.Bishop: res = bishopThreats(Cell(row,col),board,piece); break;
+                    case Piece.Type.Rook:   res = rookThreats(Cell(row,col),board,piece); break;
+                    case Piece.Type.Queen:  res = queenThreats(Cell(row,col),board,piece); break;
+                    case Piece.Type.King:   res = kingThreats(Cell(row,col),board,piece); break;
+                }
+            }
+        }
+    }
+
+    return res;
+}
+
+function isPieceThreatened(piece,board) {
+    return isPieceThreatenedBy(piece,board,null);
+}
+
+function pawnThreats(pawnCell, board, pieceToThreat)
+{
+    var forward = board[pawnCell.row][pawnCell.column].color.equals(Piece.Color.Black) ? -1 : 1;
+
+    return (inRange(pawnCell.row + forward,pawnCell.column + 1) && board[pawnCell.row + forward][pawnCell.column + 1] === pieceToThreat) ||
+        (inRange(pawnCell.row + forward,pawnCell.column - 1) && board[pawnCell.row + forward][pawnCell.column - 1] === pieceToThreat);
+}
+
+function knightThreats(knightCell, board, pieceToThreat)
+{
+
+    if(inRange(knightCell.row - 1,knightCell.column - 2) && board[knightCell.row - 1][knightCell.column - 2] === pieceToThreat) return true;
+    else if(inRange(knightCell.row - 2,knightCell.column - 1) && board[knightCell.row - 2][knightCell.column - 1] === pieceToThreat) return true;
+    else if(inRange(knightCell.row - 2,knightCell.column + 1) && board[knightCell.row - 2][knightCell.column + 1] === pieceToThreat) return true;
+    else if(inRange(knightCell.row - 1,knightCell.column + 2) && board[knightCell.row - 1][knightCell.column + 2] === pieceToThreat) return true;
+    else if(inRange(knightCell.row + 1,knightCell.column - 2) && board[knightCell.row + 1][knightCell.column - 2] === pieceToThreat) return true;
+    else if(inRange(knightCell.row + 2,knightCell.column - 1) && board[knightCell.row + 2][knightCell.column - 1] === pieceToThreat) return true;
+    else if(inRange(knightCell.row + 1,knightCell.column + 2) && board[knightCell.row + 1][knightCell.column + 2] === pieceToThreat) return true;
+    else if(inRange(knightCell.row + 2,knightCell.column + 1) && board[knightCell.row + 2][knightCell.column + 1] === pieceToThreat) return true;
+
+    return false;
+}
+
+function bishopThreats(bishopCell, board, pieceToThreat)
+{
+    // top-right diagonal
+    for(var margin = 1; inRange(bishopCell.row + margin,bishopCell.column + margin); margin++)
+    {
+        if(board[bishopCell.row + margin][bishopCell.column + margin] === pieceToThreat) return true;
+        if(board[bishopCell.row + margin][bishopCell.column + margin] !== null) break;
+    }
+    // top-left diagonal
+    for(var margin = 1; inRange(bishopCell.row + margin,bishopCell.column - margin); margin++)
+    {
+        if(board[bishopCell.row + margin][bishopCell.column - margin] === pieceToThreat) return true;
+        if(board[bishopCell.row + margin][bishopCell.column - margin] !== null) break;
+    }
+    // bottom-left diagonal
+    for(var margin = -1; inRange(bishopCell.row + margin,bishopCell.column + margin); margin--)
+    {
+        if(board[bishopCell.row + margin][bishopCell.column + margin] === pieceToThreat) return true;
+        if(board[bishopCell.row + margin][bishopCell.column + margin] !== null) break;
+    }
+    // bottom-right diagonal
+    for(var margin = -1; inRange(bishopCell.row + margin,bishopCell.column - margin); margin--)
+    {
+        if(board[bishopCell.row + margin][bishopCell.column - margin] === pieceToThreat) return true;
+        if(board[bishopCell.row + margin][bishopCell.column - margin] !== null) break;
+    }
+
+    return false;
+}
+
+function rookThreats(bishopCell, board, pieceToThreat)
+{
+    // bottom
+    for(var row = bishopCell.row - 1; row >= 0; row--)
+    {
+        if(board[row][bishopCell.column] === pieceToThreat) return true;
+        if(board[row][bishopCell.column] !== null) break;
+    }
+    // top
+    for(var row = bishopCell.row + 1; row < 8; row++)
+    {
+        if(board[row][bishopCell.column] === pieceToThreat) return true;
+        if(board[row][bishopCell.column] !== null) break;
+    }
+    // left
+    for(var col = bishopCell.column - 1; col >= 0; col--)
+    {
+        if(board[bishopCell.row][col] === pieceToThreat) return true;
+        if(board[bishopCell.row][col] !== null) break;
+    }
+    // right
+    for(var col = bishopCell.column + 1; col < 8; col++)
+    {
+        if(board[bishopCell.row][col] === pieceToThreat) return true;
+        if(board[bishopCell.row][col] !== null) break;
+    }
+
+    return false;
+}
+
+function kingThreats(kingCell, board, pieceToThreat)
+{
+    for(var row = kingCell.row - 1; row <= kingCell.row + 1; row++)
+    {
+        for(var col = kingCell.column - 1; col <= kingCell.column + 1; col++)
+        {
+            if(inRange(row,col) && (kingCell.row != row || kingCell.column != col) && board[row][col] === pieceToThreat) return true;
+        }
+    }
+
+    return false;
+}
+
+function queenThreats(queenCell, board, pieceToThreat)
+{
+    // top-right diagonal
+    for(var margin = 1; inRange(queenCell.row + margin,queenCell.column + margin); margin++)
+    {
+        if(board[queenCell.row + margin][queenCell.column + margin] === pieceToThreat) return true;
+        if(board[queenCell.row + margin][queenCell.column + margin] !== null) break;
+    }
+    // top-left diagonal
+    for(var margin = 1; inRange(queenCell.row + margin,queenCell.column - margin); margin++)
+    {
+        if(board[queenCell.row + margin][queenCell.column - margin] === pieceToThreat) return true;
+        if(board[queenCell.row + margin][queenCell.column - margin] !== null) break;
+    }
+    // bottom-left diagonal
+    for(var margin = -1; inRange(queenCell.row + margin,queenCell.column + margin); margin--)
+    {
+        if(board[queenCell.row + margin][queenCell.column + margin] === pieceToThreat) return true;
+        if(board[queenCell.row + margin][queenCell.column + margin] !== null) break;
+    }
+    // bottom-right diagonal
+    for(var margin = -1; inRange(queenCell.row + margin,queenCell.column - margin); margin--)
+    {
+        if(board[queenCell.row + margin][queenCell.column - margin] === pieceToThreat) return true;
+        if(board[queenCell.row + margin][queenCell.column - margin] !== null) break;
+    }
+
+    // bottom
+    for(var row = queenCell.row - 1; row >= 0; row--)
+    {
+        if(board[row][queenCell.column] === pieceToThreat) return true;
+        if(board[row][queenCell.column] !== null) break;
+    }
+    // top
+    for(var row = queenCell.row + 1; row < 8; row++)
+    {
+        if(board[row][queenCell.column] === pieceToThreat) return true;
+        if(board[row][queenCell.column] !== null) break;
+    }
+    // left
+    for(var col = queenCell.column - 1; col >= 0; col--)
+    {
+        if(board[queenCell.row][col] === pieceToThreat) return true;
+        if(board[queenCell.row][col] !== null) break;
+    }
+    // right
+    for(var col = queenCell.column + 1; col < 8; col++)
+    {
+        if(board[queenCell.row][col] === pieceToThreat) return true;
+        if(board[queenCell.row][col] !== null) break;
+    }
+
+    return false;
+}
+//</editor-fold>
 
 //<editor-fold desc="Pawn Rules">
 bp.registerBThread("pawn rules", function(){
@@ -276,7 +556,6 @@ bp.registerBThread("pawn rules", function(){
             bp.registerBThread(pawn + " Eat Movement", function() {
                 var cell = initCell;
                 var myPawn = pawn;
-                var myForward = forward;
 
                 while(true)
                 {
@@ -287,12 +566,7 @@ bp.registerBThread("pawn rules", function(){
                         cell = state.lastMove.target;
                     }
 
-                    var optionalMoves = [];
-                    var currentBoard = state.board;
-
-                    // check in state.board if these cells has enemies - then eat
-                    if(inRange(cell.row + myForward,cell.column + 1) && currentBoard[cell.row + myForward][cell.column + 1] !== null) optionalMoves.push(Move(cell, Cell(cell.row + myForward, cell.column + 1), myPawn));
-                    if(inRange(cell.row + myForward,cell.column - 1) && currentBoard[cell.row + myForward][cell.column - 1] !== null) optionalMoves.push(Move(cell, Cell(cell.row + myForward, cell.column - 1), myPawn));
+                    var optionalMoves = pawnMoves(myPawn,cell,state.board);
 
                     bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
@@ -300,6 +574,29 @@ bp.registerBThread("pawn rules", function(){
         }
     }
 });
+
+function pawnMovesExcept(pawn,pawnCell,board,exceptGroup, normalMovesFlag)
+{
+    var optionalMoves = [];
+    var myForward = pawn.color.equals(Piece.Color.Black) ? -1 : 1;
+
+    // check in board if these cells has enemies - then eat
+    if(inRange(pawnCell.row + myForward,pawnCell.column + 1) && board[pawnCell.row + myForward][pawnCell.column + 1] !== null && (exceptGroup === null || !containsMove(exceptGroup, Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column + 1), pawn)))) optionalMoves.push(Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column + 1), pawn));
+    if(inRange(pawnCell.row + myForward,pawnCell.column - 1) && board[pawnCell.row + myForward][pawnCell.column - 1] !== null && (exceptGroup === null || !containsMove(exceptGroup, Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column - 1), pawn)))) optionalMoves.push(Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column - 1), pawn));
+
+    if(normalMovesFlag)
+    {
+        if(inRange(pawnCell.row + myForward,pawnCell.column) && board[pawnCell.row + myForward][pawnCell.column] === null && (exceptGroup === null || !containsMove(exceptGroup, Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column), pawn)))) optionalMoves.push(Move(pawnCell, Cell(pawnCell.row + myForward, pawnCell.column), pawn));
+        if(inRange(pawnCell.row + myForward,pawnCell.column) && inRange(pawnCell.row + myForward*2,pawnCell.column) && board[pawnCell.row + myForward][pawnCell.column] === null && board[pawnCell.row + myForward*2][pawnCell.column] === null && (exceptGroup === null || !containsMove(exceptGroup,Move(pawnCell, Cell(pawnCell.row + myForward*2, pawnCell.column), pawn)))) optionalMoves.push(Move(pawnCell, Cell(pawnCell.row + myForward*2, pawnCell.column), pawn));
+    }
+
+    return optionalMoves;
+}
+
+function pawnMoves(pawn,pawnCell,board)
+{
+    return pawnMovesExcept(pawn,pawnCell,board,null,false);
+}
 //</editor-fold>
 
 //<editor-fold desc="King Rules">
@@ -311,7 +608,6 @@ bp.registerBThread("king rules", function ()
 
         var king = kingCreationEvent.piece;
         var initCell = kingCreationEvent.cell;
-        var otherColor = king.color.equals(Piece.Color.White) ? Piece.Color.Black : Piece.Color.White;
 
         if(autoMovesBlack && (king.color.equals(Piece.Color.Black)) || (autoMovesWhite && king.color.equals(Piece.Color.White)))
         {
@@ -329,41 +625,156 @@ bp.registerBThread("king rules", function ()
                         cell = state.lastMove.target;
                     }
 
-                    var optionalMoves = [];
-                    for(var row = cell.row - 1; row <= cell.row + 1; row++)
-                    {
-                        for(var col = cell.column - 1; col <= cell.column + 1; col++)
-                        {
-                            if(inRange(row,col) && (cell.row != row || cell.column != col)) optionalMoves.push(Move(cell, Cell(row, col), myKing));
-                        }
-                    }
+                    var optionalMoves = kingMoves(myKing,cell,state.board);
 
                     bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
             });
         }
 
-        bp.registerBThread("Detect " + otherColor + " Win", function () {
-            var cell = initCell;
+        //Rule: "A king is in check when it is under attack by at least one enemy piece."
+        bp.registerBThread("Detect " + king + " in CHECK",function () {
             var myKing = king;
-            var otherColorGroup = otherColor;
-            var moveEvent;
+            var cell = initCell;
 
             while(true)
             {
-                moveEvent = bp.sync({waitFor: [moveTo(cell),pieceMove(myKing)]
-                });
+                var state = bp.sync({waitFor:stateUpdate}).data;
 
-                if(pieceMove(myKing).contains(moveEvent)) cell = moveEvent.target;
-                else
+                if(pieceMove(myKing).contains(state.lastMove))
                 {
-                    bp.sync({request: bp.Event("Game Over - " + otherColorGroup + " Wins"),block:moves});
-                    bp.sync({block:moves});
+                    cell = state.lastMove.target;
                 }
+
+                if(isPieceThreatened(myKing,state.board)) bp.sync({request: bp.Event("KingInCheckUpdate", {king:myKing,board:state.board}),block:moves});
             }
+        });
+
+        // Rule: "It is illegal to make a move that places or leaves one's king in check."
+        bp.registerBThread("Block moves that places or leaves " + king + " in check",function () {
+
+            var myKing = king;
+
+            while (true)
+            {
+                var state = bp.sync({waitFor:stateUpdate}).data;
+                var movesToBlock = [];
+
+                for(var row = 0; row < state.board.length; row++)
+                {
+                    for(var col = 0; col < state.board[row].length; col++)
+                    {
+                        // king's team pieces
+                        if(state.board[row][col] !== null && myKing.color.equals(state.board[row][col].color))
+                        {
+                            var myMoves;
+
+                            // get optionalMoves
+                            switch(state.board[row][col].type)
+                            {
+                                case Piece.Type.Pawn:   myMoves = pawnMovesExcept(state.board[row][col],Cell(row,col),state.board,null,true); break;
+                                case Piece.Type.Knight: myMoves = knightMoves(state.board[row][col],Cell(row,col),state.board); break;
+                                case Piece.Type.Bishop: myMoves = bishopMoves(state.board[row][col],Cell(row,col),state.board); break;
+                                case Piece.Type.Rook:   myMoves = rookMoves(state.board[row][col],Cell(row,col),state.board); break;
+                                case Piece.Type.Queen:  myMoves = queenMoves(state.board[row][col],Cell(row,col),state.board); break;
+                                case Piece.Type.King:   myMoves = kingMoves(state.board[row][col],Cell(row,col),state.board); break;
+                            }
+
+                            // filter all moves that leaves one's king in check.
+                            for(var i = 0; i < myMoves.length; i++)
+                            {
+                                if(isPieceThreatened(myKing,boardAfterMove(state.board,myMoves[i])))
+                                {
+                                    movesToBlock.push(myMoves[i]);
+                                }
+                            }
+                        }
+
+                    }
+                }
+
+                bp.sync({block:movesToBlock,waitFor:moves});
+            }
+        });
+
+
+        // Rule: "If a player's king is placed in check and there is no legal move that player can make to escape check, then the king is said to be checkmated, the game ends.
+        // (If it is not possible to get out of check, the king is checkmated and the game is over)"
+        bp.registerBThread("Detect " + king + " in CheckMate",function(){
+
+            var myKing = king;
+
+           while (true)
+           {
+               var state = bp.sync({waitFor:stateUpdate}).data;
+               var optionalMoves = [];
+
+               for(var row = 0; row < state.board.length; row++)
+               {
+                   for(var col = 0; col < state.board[row].length; col++)
+                   {
+                       // king's team pieces
+                       if(state.board[row][col] !== null && myKing.color.equals(state.board[row][col].color))
+                       {
+                           var myMoves;
+
+                           // get optionalMoves
+                           switch(state.board[row][col].type)
+                           {
+                               case Piece.Type.Pawn:   myMoves = pawnMovesExcept(state.board[row][col],Cell(row,col),state.board,null,true); break;
+                               case Piece.Type.Knight: myMoves = knightMoves(state.board[row][col],Cell(row,col),state.board); break;
+                               case Piece.Type.Bishop: myMoves = bishopMoves(state.board[row][col],Cell(row,col),state.board); break;
+                               case Piece.Type.Rook:   myMoves = rookMoves(state.board[row][col],Cell(row,col),state.board); break;
+                               case Piece.Type.Queen:  myMoves = queenMoves(state.board[row][col],Cell(row,col),state.board); break;
+                               case Piece.Type.King:   myMoves = kingMoves(state.board[row][col],Cell(row,col),state.board); break;
+                           }
+
+                           // filter all moves that leaves one's king in check.
+                           for(var i = 0; i < myMoves.length; i++)
+                           {
+                               if(!isPieceThreatened(myKing,boardAfterMove(state.board,myMoves[i])))
+                               {
+                                   if(!outBoundsMoves.contains(myMoves[i]) && (!(state.board[myMoves[i].target.row][myMoves[i].target.column] instanceof Piece) || !state.board[row][col].color.equals(state.board[myMoves[i].target.row][myMoves[i].target.column].color)))
+                                   {
+                                       optionalMoves.push(myMoves[i]);
+                                   }
+                               }
+                           }
+                       }
+
+                   }
+               }
+
+               if(optionalMoves.length === 0)
+               {
+                   bp.sync({request:bp.Event("CheckMateState",{loser:myKing}),block:[moves,checkUpdate]});
+                   //bp.log.info("Game Over - " + myKing + " has been Checkmated.");
+                   bp.sync({block:moves});
+               }
+           }
         });
     }
 });
+
+function kingMovesExcept(king,kingCell,board,exceptGroup)
+{
+    var optionalMoves = [];
+
+    for(var row = kingCell.row - 1; row <= kingCell.row + 1; row++)
+    {
+        for(var col = kingCell.column - 1; col <= kingCell.column + 1; col++)
+        {
+            if(inRange(row,col) && (kingCell.row != row || kingCell.column != col) && (exceptGroup === null || !containsMove(exceptGroup,Move(kingCell, Cell(row, col), king)))) optionalMoves.push(Move(kingCell, Cell(row, col), king));
+        }
+    }
+
+    return optionalMoves;
+}
+
+function kingMoves(king,kingCell,board)
+{
+    return kingMovesExcept(king,kingCell,board,null);
+}
 //</editor-fold>
 
 //<editor-fold desc="Knight Rules">
@@ -392,15 +803,7 @@ bp.registerBThread("knight rules", function ()
                         cell = state.lastMove.target;
                     }
 
-                    var optionalMoves = [];
-                    optionalMoves.push(Move(cell, Cell(cell.row - 1, cell.column - 2), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row - 2, cell.column - 1), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row - 2, cell.column + 1), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row - 1, cell.column + 2), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row + 1, cell.column - 2), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row + 2, cell.column - 1), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row + 1, cell.column + 2), myKnight));
-                    optionalMoves.push(Move(cell, Cell(cell.row + 2, cell.column + 1), myKnight));
+                    var optionalMoves = knightMoves(myKnight,cell,state.board);
 
                     bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
@@ -408,6 +811,27 @@ bp.registerBThread("knight rules", function ()
         }
     }
 });
+
+function knightMovesExcept(knight,knightCell,board,exceptGroup)
+{
+    var optionalMoves = [];
+
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row - 1, knightCell.column - 2), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row - 1, knightCell.column - 2), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row - 2, knightCell.column - 1), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row - 2, knightCell.column - 1), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row - 2, knightCell.column + 1), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row - 2, knightCell.column + 1), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row - 1, knightCell.column + 2), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row - 1, knightCell.column + 2), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row + 1, knightCell.column - 2), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row + 1, knightCell.column - 2), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row + 2, knightCell.column - 1), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row + 2, knightCell.column - 1), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row + 1, knightCell.column + 2), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row + 1, knightCell.column + 2), knight));
+    if(exceptGroup === null || exceptGroup.indexOf(Move(knightCell, Cell(knightCell.row + 2, knightCell.column + 1), knight)) === -1) optionalMoves.push(Move(knightCell, Cell(knightCell.row + 2, knightCell.column + 1), knight));
+
+    return optionalMoves;
+}
+
+function knightMoves(knight,knightCell,board)
+{
+    return knightMovesExcept(knight,knightCell,board,null);
+}
 //</editor-fold>
 
 //<editor-fold desc="Rook Rules">
@@ -436,32 +860,7 @@ bp.registerBThread("rook rules", function ()
                         cell = state.lastMove.target;
                     }
 
-                    var optionalMoves = [];
-
-                    // bottom
-                    for(var row = cell.row - 1; row >= 0; row--)
-                    {
-                        optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
-                        if(state.board[row][cell.column] !== null) break;
-                    }
-                    // top
-                    for(var row = cell.row + 1; row < 8; row++)
-                    {
-                        optionalMoves.push(Move(cell, Cell(row, cell.column), myRook));
-                        if(state.board[row][cell.column] !== null) break;
-                    }
-                    // left
-                    for(var col = cell.column - 1; col >= 0; col--)
-                    {
-                        optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
-                        if(state.board[cell.row][col] !== null) break;
-                    }
-                    // right
-                    for(var col = cell.column + 1; col < 8; col++)
-                    {
-                        optionalMoves.push(Move(cell, Cell(cell.row, col), myRook));
-                        if(state.board[cell.row][col] !== null) break;
-                    }
+                    var optionalMoves = rookMoves(myRook,cell,state.board);
 
                     bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
                 }
@@ -469,34 +868,213 @@ bp.registerBThread("rook rules", function ()
         }
     }
 });
+
+function rookMovesExcept(rook,rookCell,board,exceptGroup)
+{
+    var optionalMoves = [];
+
+    // bottom
+    for(var row = rookCell.row - 1; row >= 0; row--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(rookCell, Cell(row, rookCell.column), rook))) optionalMoves.push(Move(rookCell, Cell(row, rookCell.column), rook));
+        if(board[row][rookCell.column] !== null) break;
+    }
+    // top
+    for(var row = rookCell.row + 1; row < 8; row++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(rookCell, Cell(row, rookCell.column), rook))) optionalMoves.push(Move(rookCell, Cell(row, rookCell.column), rook));
+        if(board[row][rookCell.column] !== null) break;
+    }
+    // left
+    for(var col = rookCell.column - 1; col >= 0; col--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(rookCell, Cell(rookCell.row, col), rook))) optionalMoves.push(Move(rookCell, Cell(rookCell.row, col), rook));
+        if(board[rookCell.row][col] !== null) break;
+    }
+    // right
+    for(var col = rookCell.column + 1; col < 8; col++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(rookCell, Cell(rookCell.row, col), rook))) optionalMoves.push(Move(rookCell, Cell(rookCell.row, col), rook));
+        if(board[rookCell.row][col] !== null) break;
+    }
+
+    //if(exceptGroup !== null) bp.log.info("try Except: " + rook + " in " + rookCell +" | group: " + exceptGroup + " | Final Except: " + optionalMoves);
+
+    return optionalMoves;
+}
+
+function rookMoves(rook,rookCell,board)
+{
+    return rookMovesExcept(rook,rookCell,board,null);
+}
 //</editor-fold>
 
-/*//<editor-fold desc="Bishop Rules">
-bp.registerBThread("rook rules", function () {
+//<editor-fold desc="Bishop Rules">
+bp.registerBThread("bishop rules", function () {
     while (true) {
-        var rookCreationEvent = bp.sync({waitFor: rookCreation}).data;
+        var bishopCreationEvent = bp.sync({waitFor: bishopCreation}).data;
 
-        var rook = rookCreationEvent.piece;
-        var initCell = rookCreationEvent.cell;
+        var bishop = bishopCreationEvent.piece;
+        var initCell = bishopCreationEvent.cell;
 
-        if (autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White))) {
+        if (autoMovesBlack && (bishop.color.equals(Piece.Color.Black)) || (autoMovesWhite && bishop.color.equals(Piece.Color.White)))
+        {
+            // Rule: "A bishop moves any number of vacant squares diagonally."
+            bp.registerBThread(bishop + " Movement", function () {
+                var cell = initCell;
+                var myBishop = bishop;
 
+                while (true)
+                {
+                    var state = bp.sync({waitFor: stateUpdate, interrupt: moveTo(cell)}).data;
+
+                    if (pieceMove(myBishop).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
+
+                    var optionalMoves = bishopMoves(myBishop,cell,state.board);
+
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
+                }
+            });
         }
     }
 });
+
+function bishopMovesExcept(bishop,bishopCell,board,exceptGroup)
+{
+    var optionalMoves = [];
+
+    // top-right diagonal
+    for(var margin = 1; inRange(bishopCell.row + margin,bishopCell.column + margin); margin++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column + margin), bishop))) optionalMoves.push(Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column + margin), bishop));
+        if(board[bishopCell.row + margin][bishopCell.column + margin] !== null) break;
+    }
+    // top-left diagonal
+    for(var margin = 1; inRange(bishopCell.row + margin,bishopCell.column - margin); margin++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column - margin), bishop))) optionalMoves.push(Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column - margin), bishop));
+        if(board[bishopCell.row + margin][bishopCell.column - margin] !== null) break;
+    }
+    // bottom-left diagonal
+    for(var margin = -1; inRange(bishopCell.row + margin,bishopCell.column + margin); margin--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column + margin), bishop))) optionalMoves.push(Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column + margin), bishop));
+        if(board[bishopCell.row + margin][bishopCell.column + margin] !== null) break;
+    }
+    // bottom-right diagonal
+    for(var margin = -1; inRange(bishopCell.row + margin,bishopCell.column - margin); margin--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column - margin), bishop))) optionalMoves.push(Move(bishopCell, Cell(bishopCell.row + margin, bishopCell.column - margin), bishop));
+        if(board[bishopCell.row + margin][bishopCell.column - margin] !== null) break;
+    }
+
+    return optionalMoves;
+}
+
+function bishopMoves(bishop,bishopCell,board)
+{
+    return bishopMovesExcept(bishop,bishopCell,board,null);
+}
 //</editor-fold>
 
 //<editor-fold desc="Queen Rules">
-bp.registerBThread("rook rules", function () {
-    while (true) {
-        var rookCreationEvent = bp.sync({waitFor: rookCreation}).data;
+bp.registerBThread("queen rules", function () {
+    while (true)
+    {
+        var queenCreationEvent = bp.sync({waitFor: queenCreation}).data;
 
-        var rook = rookCreationEvent.piece;
-        var initCell = rookCreationEvent.cell;
+        var queen = queenCreationEvent.piece;
+        var initCell = queenCreationEvent.cell;
 
-        if (autoMovesBlack && (rook.color.equals(Piece.Color.Black)) || (autoMovesWhite && rook.color.equals(Piece.Color.White))) {
+        if (autoMovesBlack && (queen.color.equals(Piece.Color.Black)) || (autoMovesWhite && queen.color.equals(Piece.Color.White)))
+        {
+            // Rule: "The queen moves any number of vacant squares horizontally, vertically, or diagonally."
+            bp.registerBThread(queen + " Movement", function () {
+                var cell = initCell;
+                var myQueen = queen;
 
+                while (true)
+                {
+                    var state = bp.sync({waitFor: stateUpdate, interrupt: moveTo(cell)}).data;
+
+                    if (pieceMove(myQueen).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
+
+                    var optionalMoves = queenMoves(myQueen,cell,state.board);
+
+                    bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
+                }
+            });
         }
     }
 });
-//</editor-fold>*/
+
+function queenMovesExcept(queen,queenCell,board,exceptGroup)
+{
+    var optionalMoves = [];
+
+    // bottom
+    for(var row = queenCell.row - 1; row >= 0; row--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(row, queenCell.column), queen))) optionalMoves.push(Move(queenCell, Cell(row, queenCell.column), queen));
+        if(board[row][queenCell.column] !== null) break;
+    }
+    // top
+    for(var row = queenCell.row + 1; row < 8; row++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(row, queenCell.column), queen))) optionalMoves.push(Move(queenCell, Cell(row, queenCell.column), queen));
+        if(board[row][queenCell.column] !== null) break;
+    }
+    // left
+    for(var col = queenCell.column - 1; col >= 0; col--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row, col), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row, col), queen));
+        if(board[queenCell.row][col] !== null) break;
+    }
+    // right
+    for(var col = queenCell.column + 1; col < 8; col++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row, col), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row, col), queen));
+        if(board[queenCell.row][col] !== null) break;
+    }
+
+    // top-right diagonal
+    for(var margin = 1; inRange(queenCell.row + margin,queenCell.column + margin); margin++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row + margin, queenCell.column + margin), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row + margin, queenCell.column + margin), queen));
+        if(board[queenCell.row + margin][queenCell.column + margin] !== null) break;
+    }
+    // top-left diagonal
+    for(var margin = 1; inRange(queenCell.row + margin,queenCell.column - margin); margin++)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row + margin, queenCell.column - margin), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row + margin, queenCell.column - margin), queen));
+        if(board[queenCell.row + margin][queenCell.column - margin] !== null) break;
+    }
+    // bottom-left diagonal
+    for(var margin = -1; inRange(queenCell.row + margin,queenCell.column + margin); margin--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row + margin, queenCell.column + margin), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row + margin, queenCell.column + margin), queen));
+        if(board[queenCell.row + margin][queenCell.column + margin] !== null) break;
+    }
+    // bottom-right diagonal
+    for(var margin = -1; inRange(queenCell.row + margin,queenCell.column - margin); margin--)
+    {
+        if(exceptGroup === null || !containsMove(exceptGroup,Move(queenCell, Cell(queenCell.row + margin, queenCell.column - margin), queen))) optionalMoves.push(Move(queenCell, Cell(queenCell.row + margin, queenCell.column - margin), queen));
+        if(board[queenCell.row + margin][queenCell.column - margin] !== null) break;
+    }
+
+    //if(exceptGroup !== null) bp.log.info("try Except: " + queen + " in " + queenCell +" | group: " + exceptGroup + " | Final Except: " + optionalMoves);
+
+    return optionalMoves;
+}
+
+function queenMoves(queen,queenCell,board)
+{
+    return queenMovesExcept(queen,queenCell,board,null);
+}
+//</editor-fold>

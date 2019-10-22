@@ -10,7 +10,7 @@ public class Move extends BEvent
 
     public Move(Cell source, Cell target, Piece piece)
     {
-        super("Move("+source+","+target+","+piece);
+        super("Move("+source+","+target+","+piece+")");
         this.source = source;
         this.target = target;
         this.piece = piece;

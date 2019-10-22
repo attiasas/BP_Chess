@@ -139,6 +139,8 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             turn = !turn;
         }
 
+        if(theEvent.name.equals("CheckMateState")) quitGame();
+
         if(theEvent.name.equals("StateUpdate"))
         {
             Move theMove = (Move)((NativeObject)theEvent.getDataField().get()).values().toArray()[1];
@@ -423,7 +425,6 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             programNames.add("PopulateBoard.js");
             programNames.add("rules_no_context.js");
             programNames.add("verification.js");
-            //programNames.add("No_Context_Chess_Program.js");
 
             bProgram = new ResourceBProgram(programNames,"ChessProgram",new SimpleEventSelectionStrategy());//,new PrioritizedBThreadsEventSelectionStrategy());
             bProgram.setWaitForExternalEvents(true);
