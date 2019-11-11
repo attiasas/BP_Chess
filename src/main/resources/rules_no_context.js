@@ -708,10 +708,7 @@ bp.registerBThread("pawn rules", function(){
 
                             var enPassant = EnPassant(cell,Cell(targetRow,targetColumn),myPawn,state.lastMove.piece);
                             // * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
-                            var t = bp.EventSet("", function (e) {
-                               return moves.contains(e) && e.piece.color.equals(myPawn.color) && !enPassantMove.contains(e);
-                            });
-                            bp.sync({request: enPassant, block: t, waitFor:moves,interrupt:moveTo(cell)});
+                            bp.sync({request: enPassant, waitFor:moves,interrupt:moveTo(cell)});
                         }
                     }
                 }
