@@ -1,4 +1,4 @@
-package il.ac.bgu.cs.bp.Chess.schema;
+package il.ac.bgu.cs.bp.Chess;
 
 import il.ac.bgu.cs.bp.bpjs.model.BEvent;
 
@@ -11,6 +11,14 @@ public class Move extends BEvent
     public Move(Cell source, Cell target, Piece piece)
     {
         super("Move("+source+","+target+","+piece+")");
+        this.source = source;
+        this.target = target;
+        this.piece = piece;
+    }
+
+    public Move(Cell source, Cell target, Piece piece, String otherName)
+    {
+        super(otherName);
         this.source = source;
         this.target = target;
         this.piece = piece;
@@ -37,12 +45,6 @@ public class Move extends BEvent
         board[source.row][source.column] = null;
         board[target.row][target.column] = piece;
     }
-
-  /*  @Override
-    public String toString()
-    {
-        return source + "->" + target;
-    }*/
 
     @Override
     public boolean equals(Object obj) {

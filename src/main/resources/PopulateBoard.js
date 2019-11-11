@@ -1,4 +1,4 @@
-importPackage(Packages.il.ac.bgu.cs.bp.Chess.schema);
+importPackage(Packages.il.ac.bgu.cs.bp.Chess);
 
 var fenEvent = bp.EventSet("", function (e) {
    return e.name.equals("ParseFen");

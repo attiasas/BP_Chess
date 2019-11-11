@@ -55,6 +55,12 @@ function moveFrom(cell) {
     });
 }
 
+function allMovesExcept(move) {
+    return bp.EventSet("all exceot " + move, function (e) {
+       return (e instanceof Move) && (!e.source.equals(move.source) || !e.target.equals(move.target) || !e.piece.equals(move.piece));
+    });
+}
+
 function moveToWithColor(destination, color) {
     return bp.EventSet("", function (e) {
         return e instanceof Move && e.target.equals(destination) &&
@@ -74,6 +80,12 @@ function pieceMove(piece) {
         return (e instanceof Move) && e.piece.equals(piece);
     });
 }
+
+function enPassantOnPiece(pawn) {
+    return bp.EventSet("", function (e) {
+       return enPassantMove.contains(e) && e.piece2.equals(pawn);
+    });
+}
 //</editor-fold>
 
 //<editor-fold desc="Global Move Sets">
@@ -87,6 +99,14 @@ var checkUpdate = bp.EventSet("",function (e) {
 
 var moves = bp.EventSet("Game Moves", function (e) {
     return (e instanceof Move);
+});
+
+var castlingMove = bp.EventSet("Castling Moves", function (e) {
+   return (e instanceof Castling);
+});
+
+var enPassantMove = bp.EventSet("EnPassant Moves", function (e) {
+   return (e instanceof EnPassant);
 });
 
 var whiteMoves = bp.EventSet("White Moves",function (e) {
@@ -125,19 +145,41 @@ bp.registerBThread("UpdateStateAfterMove", function () {
         board[e.source.row][e.source.column] = null;
         board[e.target.row][e.target.column] = e.piece;
 
+        if(enPassantMove.contains(e))
+        {
+            board[e.source.row][e.target.column] = null;
+        }
+
         bp.sync({request: bp.Event("StateUpdate", {board:board, lastMove: e})});
     }
 });
 
 bp.registerBThread("EnforceTurns",function () {
 
+    var secondMove;
     while (true)
     {
-        bp.sync({waitFor:whiteMoves,block:blackMoves});
+        var currentWhiteMove = bp.sync({waitFor:whiteMoves,block:blackMoves});
         bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
+        if(castlingMove.contains(currentWhiteMove))
+        {
+            secondMove = Move(currentWhiteMove.source2,currentWhiteMove.target2,currentWhiteMove.piece2);
+            bp.log.info("Blocking: " + allMovesExcept(secondMove));
+            bp.sync({request:secondMove,block:allMovesExcept(secondMove)});
+            bp.log.info("Done Blocking");
+            bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
+        }
 
-        bp.sync({waitFor:blackMoves,block:whiteMoves});
+        var currentBlackMove = bp.sync({waitFor:blackMoves,block:whiteMoves});
         bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
+        if(castlingMove.contains(currentBlackMove))
+        {
+            secondMove = Move(currentBlackMove.source2,currentBlackMove.target2,currentBlackMove.piece2);
+            bp.log.info("Blocking: " + allMovesExcept(secondMove));
+            bp.sync({request:secondMove,block:allMovesExcept(secondMove)});
+            bp.log.info("Done Blocking");
+            bp.sync({waitFor:stateUpdate, block:allExceptStateUpdate});
+        }
     }
 });
 
@@ -159,8 +201,8 @@ bp.registerBThread("don't move if eaten ", function() {
             var cell = initCell;
             var myPiece = piece;
             while(true) {
-                var e = bp.sync({waitFor: [pieceMove(myPiece), moveTo(cell)] });
-                if(e.target.equals(cell)) {
+                var e = bp.sync({waitFor: [pieceMove(myPiece), moveTo(cell), enPassantOnPiece(myPiece)] });
+                if(e.target.equals(cell) || enPassantMove.contains(e)) {
                     bp.sync({block:pieceMove(myPiece)});
                 } else {
                     cell = e.target;
@@ -174,7 +216,7 @@ function cellRules() {
     var i,j;
     for(i = 0 ; i < 8; i++) {
         for(j = 0 ; j < 8; j++) {(function (i,j) {
-            var cell = Cell(i,j);
+            var cell = new Cell(i,j);
             bp.registerBThread("don't move to a cell with the same color " + cell, function() {
                 var piece = null;
                 var e;
@@ -254,13 +296,6 @@ bp.registerBThread("Detect Draw",function () {
 });
 
 //</editor-fold>
-
-//TODO: (PAWN) Rule: "En passant - When a pawn advances two squares from its original square and ends the turn adjacent to a pawn of the opponent's on the same rank, it may be captured by that pawn of the opponent's, as if it had moved only one square forward."
-// * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
-//TODO: Rule: "Castling consists of moving the king two squares towards a rook, then placing the rook on the other side of the king, adjacent to it."
-// * The king and rook involved in castling must not have previously moved
-// * There must be no pieces between the king and the rook
-// * The king may not currently be in check, nor may the king pass through or end up in a square that is under attack by an enemy piece
 
 //<editor-fold desc="Help Functions">
 function inRange(row,column)
@@ -494,6 +529,80 @@ function queenThreats(queenCell, board, pieceToThreat)
 }
 //</editor-fold>
 
+//<editor-fold desc="Castling">
+bp.registerBThread("Castling",function ()
+{
+    var initState = bp.sync({waitFor:stateUpdate}).data;
+    var board = initState.board;
+
+    for(var i = 0; i < 2; i++)
+    {
+        var color = i == 0 ? Piece.Color.White : Piece.Color.Black;
+        var king = null;
+        var rooks = [];
+
+        //scan for pieces
+        for(var row = 0; row < board.length; row++)
+        {
+            for(var col = 0; col < board[row].length; col++)
+            {
+                if(board[row][col] != null && board[row][col].color.equals(color))
+                {
+                    if(board[row][col].type.equals(Piece.Type.King)) king = {piece:board[row][col],cell:Cell(row,col)};
+                    else if(board[row][col].type.equals(Piece.Type.Rook)) rooks.push({piece:board[row][col],cell:Cell(row,col)});
+                }
+            }
+        }
+
+        // register threads
+        for (var j = 0; j < rooks.length; j++){(function (j, king, rooks) {
+        {
+            // Rule: "Castling consists of moving the king two squares towards a rook, then placing the rook on the other side of the king, adjacent to it."
+            bp.registerBThread("request " + king.piece + " , " + rooks[j].piece + " - Castling",function ()
+            {
+                var myKing = king.piece;
+                var kingCell = king.cell;
+                var myRook = rooks[j].piece;
+                var rookCell = rooks[j].cell;
+
+                while(true)
+                {
+                    // * The king and rook involved in castling must not have previously moved
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:[pieceMove(myKing),pieceMove(myRook),moveTo(kingCell),moveTo(rookCell)]}).data;
+
+                    // * The king may not currently be in check
+                    var reject = isPieceThreatened(myKing,state.board);
+                    for(var i = kingCell.column + (kingCell.column < rookCell.column ? 1 : -1); !reject && (kingCell.column < rookCell.column ? i < rookCell.column : i > rookCell.column);(kingCell.column < rookCell.column ? i++ : i--))
+                    {
+                        // * There must be no pieces between the king and the rook
+                        if(state.board[kingCell.row][i] !== null) reject = true;
+                        else
+                        {
+                            // * The king may not pass through a square that is under attack by an enemy piece
+                            reject = isPieceThreatened(myKing,boardAfterMove(state.board,Move(kingCell,Cell(kingCell.row,i),myKing)));
+                        }
+                    }
+
+                    if(!reject)
+                    {
+                        var firstMove = Move(kingCell,Cell(kingCell.row,(kingCell.column < rookCell.column ? kingCell.column + 2 : kingCell.column - 2)),myKing);
+                        var secondMove = Move(rookCell,Cell(rookCell.row,(kingCell.column < rookCell.column ? kingCell.column + 1 : kingCell.column - 1)),myRook);
+
+                        // * The king may not end up in a square that is under attack by an enemy piece
+                        if(!isPieceThreatened(myKing,boardAfterMove(boardAfterMove(state.board,firstMove),secondMove)))
+                        {
+                            var castling = Castling(firstMove.source,firstMove.target,firstMove.piece,secondMove.source,secondMove.target,secondMove.piece);
+                            bp.sync({request: castling, waitFor:moves,interrupt:[pieceMove(myKing),pieceMove(myRook),moveTo(kingCell),moveTo(rookCell)]});
+                        }
+                    }
+                }
+            });
+        }})(j,king,rooks);
+        }
+    }
+});
+//</editor-fold>
+
 //<editor-fold desc="Pawn Rules">
 bp.registerBThread("pawn rules", function(){
     while (true)
@@ -553,7 +662,8 @@ bp.registerBThread("pawn rules", function(){
             });
 
             // Rule: "A pawn can capture an enemy piece on either of the two squares diagonally in front of the pawn (but cannot move to those squares if they are vacant)."
-            bp.registerBThread(pawn + " Eat Movement", function() {
+            bp.registerBThread(pawn + " Eat Movement", function()
+            {
                 var cell = initCell;
                 var myPawn = pawn;
 
@@ -569,6 +679,41 @@ bp.registerBThread("pawn rules", function(){
                     var optionalMoves = pawnMoves(myPawn,cell,state.board);
 
                     bp.sync({request: optionalMoves, waitFor:moves,interrupt:moveTo(cell)});
+                }
+            });
+
+            // Rule: "En passant - When a pawn advances two squares from its original square and ends the turn adjacent to a pawn of the opponent's on the same rank,
+            // it may be captured by that pawn of the opponent's, as if it had moved only one square forward."
+            // * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
+            bp.registerBThread(pawn + " en passant movement", function ()
+            {
+                var cell = initCell;
+                var myPawn = pawn;
+
+                while (true)
+                {
+                    var state = bp.sync({waitFor:stateUpdate, interrupt:moveTo(cell)}).data;
+
+                    if(pieceMove(myPawn).contains(state.lastMove))
+                    {
+                        cell = state.lastMove.target;
+                    }
+                    else if(state.lastMove !== null && state.lastMove.piece.type.equals(Piece.Type.Pawn))
+                    {
+                        // check if pawn advances two squares and ends the turn adjacent on the same rank
+                        if(Math.abs(state.lastMove.target.row - state.lastMove.source.row) === 2 && state.lastMove.target.row === cell.row && (state.lastMove.target.column === cell.column - 1 || state.lastMove.target.column === cell.column + 1))
+                        {
+                            var targetRow = state.lastMove.source.row < cell.row ? cell.row -1 : cell.row + 1;
+                            var targetColumn = state.lastMove.target.column < cell.column ? cell.column -1 : cell.column + 1;
+
+                            var enPassant = EnPassant(cell,Cell(targetRow,targetColumn),myPawn,state.lastMove.piece);
+                            // * This capture is only legal on the opponent's next move immediately following the first pawn's advance.
+                            var t = bp.EventSet("", function (e) {
+                               return moves.contains(e) && e.piece.color.equals(myPawn.color) && !enPassantMove.contains(e);
+                            });
+                            bp.sync({request: enPassant, block: t, waitFor:moves,interrupt:moveTo(cell)});
+                        }
+                    }
                 }
             });
         }
@@ -696,7 +841,6 @@ bp.registerBThread("king rules", function ()
                 bp.sync({block:movesToBlock,waitFor:moves});
             }
         });
-
 
         // Rule: "If a player's king is placed in check and there is no legal move that player can make to escape check, then the king is said to be checkmated, the game ends.
         // (If it is not possible to get out of check, the king is checkmated and the game is over)"

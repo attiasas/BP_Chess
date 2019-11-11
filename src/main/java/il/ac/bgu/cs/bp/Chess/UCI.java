@@ -1,8 +1,5 @@
 package il.ac.bgu.cs.bp.Chess;
 
-import il.ac.bgu.cs.bp.Chess.schema.Cell;
-import il.ac.bgu.cs.bp.Chess.schema.Move;
-import il.ac.bgu.cs.bp.Chess.schema.Piece;
 import il.ac.bgu.cs.bp.bpjs.execution.BProgramRunner;
 import il.ac.bgu.cs.bp.bpjs.execution.listeners.BProgramRunnerListenerAdapter;
 import il.ac.bgu.cs.bp.bpjs.execution.listeners.PrintBProgramRunnerListener;
@@ -127,8 +124,6 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             moveCount = 0;
         }
 
-        if(theEvent.name.contains("Wins")) quitGame();
-
         if((theEvent instanceof Move) && ((Move)theEvent).source != null && ((Move)theEvent).target != null && ((Move)theEvent).piece != null)
         {
             if(((Move)theEvent).piece.color.equals(Piece.Color.Black))
@@ -139,7 +134,9 @@ public class UCI extends BProgramRunnerListenerAdapter implements Runnable
             turn = !turn;
         }
 
-        if(theEvent.name.equals("CheckMateState")) quitGame();
+        if(theEvent.name.equals("CheckMateState") || theEvent.name.equals("DrawState")) quitGame();
+
+        if(theEvent.name.startsWith("EnPassant")) System.out.println("EN PASSANT!!! <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
 
         if(theEvent.name.equals("StateUpdate"))
         {

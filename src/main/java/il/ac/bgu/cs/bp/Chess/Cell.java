@@ -1,4 +1,4 @@
-package il.ac.bgu.cs.bp.Chess.schema;
+package il.ac.bgu.cs.bp.Chess;
 
 public class Cell extends BasicEntity
 {

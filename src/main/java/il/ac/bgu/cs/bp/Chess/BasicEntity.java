@@ -1,4 +1,4 @@
-package il.ac.bgu.cs.bp.Chess.schema;
+package il.ac.bgu.cs.bp.Chess;
 
 import java.io.Serializable;
 

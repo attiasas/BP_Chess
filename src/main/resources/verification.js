@@ -48,13 +48,21 @@ bp.registerBThread("can't move to the same cell", function () {
 
 bp.registerBThread("check moves made in turns", function () {
     var lastColorMove = null;
+    var castling = false;
 
     while (true)
     {
-        var currentColorMove = bp.sync({waitFor:moves}).piece.color;
+        var currentMove = bp.sync({waitFor:moves});
+        var currentColorMove = currentMove.piece.color;
 
-        if(currentColorMove.equals(lastColorMove)) bp.ASSERT(false,"Turns are not enforced.");
-        else lastColorMove = currentColorMove;
+        if(!castling)
+        {
+            if(currentColorMove.equals(lastColorMove)) bp.ASSERT(false,"Turns are not enforced.");
+            else lastColorMove = currentColorMove;
+        }
+        else castling = false;
+
+        if(currentMove instanceof Castling) castling = true;
     }
 });
 
@@ -140,6 +148,8 @@ bp.registerBThread("Rook Movement verification",function ()
         return moves.contains(e) && e.piece.type.equals(Piece.Type.Rook);
     });
 
+    var castling = false;
+
     while (true)
     {
         var state = bp.sync({waitFor:stateUpdate}).data;
@@ -147,18 +157,24 @@ bp.registerBThread("Rook Movement verification",function ()
 
         if(rookMovement.contains(state.lastMove))
         {
-            var checkIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.target.row : state.lastMove.target.column;
-            var checkTargetIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.source.row : state.lastMove.source.column;
-            var delta = checkIndex < checkTargetIndex ? 1 : -1;
-            while (checkIndex + delta !== checkTargetIndex)
+            if(!castling)
             {
-                var current = state.lastMove.source.row != state.lastMove.target.row ? board[checkIndex + delta][state.lastMove.source.column] : board[state.lastMove.source.row][checkIndex + delta];
+                var checkIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.target.row : state.lastMove.target.column;
+                var checkTargetIndex = state.lastMove.source.row != state.lastMove.target.row ? state.lastMove.source.row : state.lastMove.source.column;
+                var delta = checkIndex < checkTargetIndex ? 1 : -1;
+                while (checkIndex + delta !== checkTargetIndex)
+                {
+                    var current = state.lastMove.source.row != state.lastMove.target.row ? board[checkIndex + delta][state.lastMove.source.column] : board[state.lastMove.source.row][checkIndex + delta];
 
-                if(current !== null) bp.ASSERT(false,state.lastMove.piece + " Movement is not by definition.");
+                    if(current !== null) bp.ASSERT(false,state.lastMove.piece + " Movement is not by definition.");
 
-                delta += checkIndex < checkTargetIndex ? 1 : -1;
+                    delta += checkIndex < checkTargetIndex ? 1 : -1;
+                }
             }
+            else castling = false;
         }
+
+        if(castlingMove.contains(state.lastMove)) castling = true;
     }
 });
 
